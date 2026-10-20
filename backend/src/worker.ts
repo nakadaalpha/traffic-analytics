@@ -112,6 +112,61 @@ function anonymizeIp(ip: string | undefined | null): string {
   return ip;
 }
 
+// Helper untuk mengekstrak hostname murni dari URL / Origin / Referer
+function extractHostname(input: string | null | undefined): string | null {
+  if (!input) return null;
+  try {
+    const clean = input.trim();
+    // Tambahkan protokol jika user hanya menginput "domain.com"
+    const urlString = clean.startsWith('http://') || clean.startsWith('https://')
+      ? clean
+      : `https://${clean}`;
+    const parsed = new URL(urlString);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+// Helper untuk memeriksa apakah origin diizinkan secara cerdas
+function isOriginAllowed(originHeader: string | null, allowedOriginsJson: string | null | undefined): boolean {
+  if (!originHeader) return true; // Beacon terkadang tidak mengirim origin tapi mengirim referer
+
+  const incomingHost = extractHostname(originHeader);
+  if (!incomingHost) return false;
+
+  // 1. Selalu izinkan localhost & 127.0.0.1 pada port berapa pun (Vite, Next.js, CRA, Astro, dll)
+  if (
+    incomingHost === 'localhost' ||
+    incomingHost === '127.0.0.1' ||
+    incomingHost.endsWith('.localhost')
+  ) {
+    return true;
+  }
+
+  // 2. Cocokkan dengan whitelist domain project
+  if (!allowedOriginsJson) return false;
+
+  try {
+    const list: string[] = JSON.parse(allowedOriginsJson);
+    if (list.includes('*')) return true;
+
+    return list.some((allowed) => {
+      if (allowed === '*') return true;
+      const allowedHost = extractHostname(allowed);
+      if (!allowedHost) return false;
+
+      // Izinkan subdomain atau host yang sama persis
+      return (
+        incomingHost === allowedHost ||
+        incomingHost.endsWith(`.${allowedHost}`)
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
 // In-Memory Rate Limiter per worker isolate
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT_MAX = 100;
@@ -455,10 +510,9 @@ app.post('/api/track/projects', async (c) => {
     const projectId = `prj_${idSlug}_${Math.random().toString(36).substring(2, 6)}`;
     const writeKey = `pk_live_${Math.random().toString(36).substring(2, 10)}${Date.now().toString(36)}`;
 
-    const allowedOrigins = [domain];
-    if (!domain.includes('localhost')) {
-      allowedOrigins.push('http://localhost:3000');
-    }
+    // Normalisasi domain input (bersihkan trailing slash, protokol, dll)
+    const normalizedDomain = extractHostname(domain) || domain.replace(/\/+$/, '');
+    const allowedOrigins = [normalizedDomain];
 
     await c.env.DB.prepare(
       `INSERT INTO projects (id, name, public_write_key, allowed_origins, is_active, owner_id)
@@ -615,18 +669,13 @@ app.post('/api/track/click', async (c) => {
         return;
       }
 
-      // Check allowed origin
+      // Check allowed origin dengan cerdas (Abaikan trailing slash, port, dan auto-allow localhost)
       if (originHeader && project.allowed_origins) {
-        try {
-          const allowedList: string[] = JSON.parse(project.allowed_origins);
-          const isAllowed =
-            allowedList.includes('*') ||
-            allowedList.some((allowed) => allowed === '*' || originHeader.startsWith(allowed));
-          if (!isAllowed) {
-            console.warn(`[Security Rejected] Origin "${originHeader}" not whitelisted`);
-            return;
-          }
-        } catch {}
+        const allowed = isOriginAllowed(originHeader, project.allowed_origins);
+        if (!allowed) {
+          console.warn(`[Security Rejected] Origin "${originHeader}" not whitelisted for project "${projectId}"`);
+          return;
+        }
       }
 
       if (!elementId || !pagePath) {
