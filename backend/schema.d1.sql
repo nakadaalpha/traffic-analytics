@@ -1,12 +1,28 @@
 -- Migration skema SQLite untuk Cloudflare D1
--- Tabel projects: Registrasi project, public write keys, dan allowed origins (disimpan sebagai JSON text)
+
+-- 1. Tabel users: Mengelola akun admin/pengelola project
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);
+
+-- 2. Tabel projects: Registrasi project, public write keys, dan allowed origins (disimpan sebagai JSON text)
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     public_write_key TEXT UNIQUE NOT NULL,
-    allowed_origins TEXT DEFAULT '["http://localhost:3000","http://127.0.0.1:3000"]',
+    allowed_origins TEXT DEFAULT '["http://localhost:3000"]',
     is_active INTEGER DEFAULT 1 NOT NULL,
-    created_at TEXT DEFAULT (datetime('now')) NOT NULL
+    owner_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE SET NULL
 );
 
 -- Default project untuk demo lokal & live testing
@@ -15,11 +31,11 @@ VALUES (
     'prj_default', 
     'Default Web Project', 
     'pk_live_demo12345', 
-    '["http://localhost:3000","http://127.0.0.1:3000"]', 
+    '["https://traffic-analytics-taupe.vercel.app","http://localhost:3000"]', 
     1
 );
 
--- Tabel click_events: Raw tracking log
+-- 3. Tabel click_events: Raw tracking log
 CREATE TABLE IF NOT EXISTS click_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id TEXT DEFAULT 'prj_default' NOT NULL,
@@ -39,7 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_click_events_project_time
 CREATE INDEX IF NOT EXISTS idx_click_events_project_element 
     ON click_events (project_id, element_id, page_path);
 
--- Tabel cta_metrics: Ringkasan agregasi klik atomic
+-- 4. Tabel cta_metrics: Ringkasan agregasi klik atomic
 CREATE TABLE IF NOT EXISTS cta_metrics (
     project_id TEXT NOT NULL,
     element_id TEXT NOT NULL,

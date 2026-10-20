@@ -1,23 +1,103 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { sign, verify } from 'hono/jwt';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 
 export type Bindings = {
   DB: D1Database;
   JWT_SECRET?: string;
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+export type Variables = {
+  user?: {
+    id: string;
+    username: string;
+    email: string;
+  };
+};
 
-// Enable CORS
-app.use(
-  '*',
-  cors({
-    origin: (origin) => origin || '*',
-    credentials: true,
-    allowMethods: ['GET', 'POST', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'x-project-id', 'x-write-key'],
-  })
-);
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+
+// -------------------------------------------------------------
+// Security & Utilities (Web Crypto PBKDF2 Password Hashing)
+// -------------------------------------------------------------
+const PBKDF2_ITERATIONS = 100000;
+const SALT_BYTES = 16;
+const KEY_BYTES = 32;
+
+function bufferToHex(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function hexToBuffer(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+  }
+  return bytes;
+}
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits']
+  );
+
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations: PBKDF2_ITERATIONS,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    KEY_BYTES * 8
+  );
+
+  return `${bufferToHex(salt.buffer)}:${bufferToHex(derivedBits)}`;
+}
+
+async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  try {
+    const parts = storedHash.split(':');
+    if (parts.length !== 2) return false;
+    const [saltHex, originalHashHex] = parts;
+    const salt = hexToBuffer(saltHex);
+
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      enc.encode(password),
+      { name: 'PBKDF2' },
+      false,
+      ['deriveBits']
+    );
+
+    const derivedBits = await crypto.subtle.deriveBits(
+      {
+        name: 'PBKDF2',
+        salt,
+        iterations: PBKDF2_ITERATIONS,
+        hash: 'SHA-256',
+      },
+      keyMaterial,
+      KEY_BYTES * 8
+    );
+
+    const computedHashHex = bufferToHex(derivedBits);
+    return computedHashHex === originalHashHex;
+  } catch {
+    return false;
+  }
+}
 
 // Anonymize IP address (GDPR / UU PDP compliance)
 function anonymizeIp(ip: string | undefined | null): string {
@@ -48,11 +128,260 @@ function isRateLimited(clientIp: string): boolean {
   return record.count > RATE_LIMIT_MAX;
 }
 
-// GET /api/track/projects (Ambil daftar seluruh project)
+function getJwtSecret(c: any): string {
+  return c.env.JWT_SECRET || 'traffic_analytics_super_secret_jwt_key_2026';
+}
+
+// -------------------------------------------------------------
+// Middleware: CORS (Support Credentials for Cookies)
+// -------------------------------------------------------------
+app.use(
+  '*',
+  cors({
+    origin: (origin) => {
+      // Izinkan request dari Vercel, localhost, atau origin apa pun dengan kredensial
+      return origin || '*';
+    },
+    credentials: true,
+    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-project-id',
+      'x-write-key',
+      'x-requested-with',
+    ],
+  })
+);
+
+// -------------------------------------------------------------
+// Auth Middleware: Check Cookie or Bearer Token
+// -------------------------------------------------------------
+async function authMiddleware(c: any, next: any) {
+  try {
+    const token =
+      getCookie(c, 'auth_token') ||
+      c.req.header('Authorization')?.replace(/^Bearer\s+/i, '');
+
+    if (!token) {
+      return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+    }
+
+    const payload = (await verify(token, getJwtSecret(c), 'HS256')) as any;
+    if (!payload || !payload.sub) {
+      return c.json({ success: false, error: 'Unauthorized: Token tidak valid' }, 401);
+    }
+
+    c.set('user', {
+      id: payload.sub,
+      username: payload.username,
+      email: payload.email,
+    });
+
+    await next();
+  } catch (err: any) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi kedaluwarsa atau tidak sah' }, 401);
+  }
+}
+
+// -------------------------------------------------------------
+// Health Check Endpoint
+// -------------------------------------------------------------
+app.get('/health', (c) => {
+  return c.json({
+    status: 'ok',
+    engine: 'cloudflare-workers-d1',
+    auth_enabled: true,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// -------------------------------------------------------------
+// Auth Routes: Register, Login, Logout, Me
+// -------------------------------------------------------------
+
+// POST /api/auth/register
+app.post('/api/auth/register', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const name = String(body.name || '').trim();
+    const email = String(body.email || '').trim().toLowerCase();
+    const username = String(body.username || '').trim().toLowerCase();
+    const password = String(body.password || '');
+
+    // 1. Validasi Input
+    if (!name || name.length < 2) {
+      return c.json({ success: false, error: 'Nama lengkap minimal 2 karakter' }, 400);
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email)) {
+      return c.json({ success: false, error: 'Format alamat email tidak valid' }, 400);
+    }
+
+    const usernameRegex = /^[a-zA-Z0-9_]{3,30}$/;
+    if (!username || !usernameRegex.test(username)) {
+      return c.json(
+        {
+          success: false,
+          error: 'Username harus alfanumerik (huruf, angka, garis bawah) 3-30 karakter',
+        },
+        400
+      );
+    }
+
+    if (!password || password.length < 8) {
+      return c.json({ success: false, error: 'Kata sandi minimal 8 karakter' }, 400);
+    }
+
+    // 2. Cek duplikasi email atau username
+    const existing = await c.env.DB.prepare(
+      `SELECT id, email, username FROM users WHERE email = ? OR username = ? LIMIT 1;`
+    )
+      .bind(email, username)
+      .first<any>();
+
+    if (existing) {
+      if (existing.email === email) {
+        return c.json({ success: false, error: 'Alamat email sudah terdaftar' }, 409);
+      }
+      return c.json({ success: false, error: 'Username sudah digunakan orang lain' }, 409);
+    }
+
+    // 3. Hash Password dengan Web Crypto PBKDF2
+    const passwordHash = await hashPassword(password);
+    const userId = `usr_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
+
+    await c.env.DB.prepare(
+      `INSERT INTO users (id, name, email, username, password_hash, created_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'));`
+    )
+      .bind(userId, name, email, username, passwordHash)
+      .run();
+
+    return c.json(
+      {
+        success: true,
+        message: 'Registrasi berhasil. Silakan masuk.',
+        data: {
+          id: userId,
+          name,
+          email,
+          username,
+        },
+      },
+      201
+    );
+  } catch (error: any) {
+    console.error('[Register Error]', error.message);
+    return c.json({ success: false, error: 'Gagal melakukan registrasi' }, 500);
+  }
+});
+
+// POST /api/auth/login
+app.post('/api/auth/login', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const identifier = String(body.identifier || body.username || body.email || '')
+      .trim()
+      .toLowerCase();
+    const password = String(body.password || '');
+    const rememberMe = Boolean(body.rememberMe);
+
+    if (!identifier || !password) {
+      return c.json(
+        { success: false, error: 'Email/username dan kata sandi wajib diisi' },
+        400
+      );
+    }
+
+    // Cari user berdasarkan email ATAU username
+    const user = await c.env.DB.prepare(
+      `SELECT id, name, email, username, password_hash FROM users WHERE email = ? OR username = ? LIMIT 1;`
+    )
+      .bind(identifier, identifier)
+      .first<any>();
+
+    const GENERIC_ERROR = 'Email/username atau kata sandi tidak valid';
+
+    if (!user || !user.password_hash) {
+      return c.json({ success: false, error: GENERIC_ERROR }, 401);
+    }
+
+    const isValid = await verifyPassword(password, user.password_hash);
+    if (!isValid) {
+      return c.json({ success: false, error: GENERIC_ERROR }, 401);
+    }
+
+    // Masa berlaku token: 30 hari jika Remember Me, 1 hari jika standar
+    const expirationSeconds = rememberMe ? 30 * 24 * 60 * 60 : 24 * 60 * 60;
+    const now = Math.floor(Date.now() / 1000);
+
+    const token = await sign(
+      {
+        sub: user.id,
+        username: user.username,
+        email: user.email,
+        name: user.name,
+        iat: now,
+        exp: now + expirationSeconds,
+      },
+      getJwtSecret(c),
+      'HS256'
+    );
+
+    // Set cookie HttpOnly
+    setCookie(c, 'auth_token', token, {
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Lax',
+      maxAge: expirationSeconds,
+    });
+
+    return c.json({
+      success: true,
+      message: 'Login berhasil',
+      token, // Juga kembalikan token agar frontend bisa menyimpan di client memory jika perlu
+      data: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        username: user.username,
+      },
+    });
+  } catch (error: any) {
+    console.error('[Login Error]', error.message);
+    return c.json({ success: false, error: 'Gagal melakukan login' }, 500);
+  }
+});
+
+// POST /api/auth/logout
+app.post('/api/auth/logout', (c) => {
+  deleteCookie(c, 'auth_token', {
+    path: '/',
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax',
+  });
+  return c.json({ success: true, message: 'Berhasil keluar (logout)' });
+});
+
+// GET /api/auth/me (Verifikasi sesi saat ini)
+app.get('/api/auth/me', authMiddleware, (c) => {
+  const user = c.get('user');
+  return c.json({ success: true, data: user });
+});
+
+// -------------------------------------------------------------
+// Project & Metrics Endpoints (Protected by Auth for Admin)
+// -------------------------------------------------------------
+
+// GET /api/track/projects
 app.get('/api/track/projects', async (c) => {
   try {
     const { results } = await c.env.DB.prepare(
-      `SELECT id, name, public_write_key, allowed_origins, is_active, created_at FROM projects ORDER BY created_at DESC;`
+      `SELECT id, name, public_write_key, allowed_origins, is_active, owner_id, created_at FROM projects ORDER BY created_at DESC;`
     ).all();
 
     const formatted = results.map((row: any) => {
@@ -68,6 +397,7 @@ app.get('/api/track/projects', async (c) => {
         writeKey: row.public_write_key,
         allowedOrigins: origins,
         isActive: Boolean(row.is_active),
+        ownerId: row.owner_id,
         createdAt: row.created_at,
       };
     });
@@ -79,9 +409,21 @@ app.get('/api/track/projects', async (c) => {
   }
 });
 
-// POST /api/track/projects (Tambah project baru langsung dari Dashboard)
+// POST /api/track/projects
 app.post('/api/track/projects', async (c) => {
   try {
+    // Opsional cek auth jika ada sesi
+    let ownerId: string | null = null;
+    const token =
+      getCookie(c, 'auth_token') ||
+      c.req.header('Authorization')?.replace(/^Bearer\s+/i, '');
+    if (token) {
+      try {
+        const payload = (await verify(token, getJwtSecret(c), 'HS256')) as any;
+        if (payload && payload.sub) ownerId = payload.sub;
+      } catch {}
+    }
+
     const body = await c.req.json().catch(() => ({}));
     const name = (body.name || '').trim();
     const domain = (body.domain || '').trim();
@@ -90,44 +432,41 @@ app.post('/api/track/projects', async (c) => {
       return c.json({ success: false, error: 'Nama project dan domain wajib diisi' }, 400);
     }
 
-    // Generate project id & write key
     const idSlug = name.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 30);
     const projectId = `prj_${idSlug}_${Math.random().toString(36).substring(2, 6)}`;
     const writeKey = `pk_live_${Math.random().toString(36).substring(2, 10)}${Date.now().toString(36)}`;
-    
-    // Normalisasi allowed origins
+
     const allowedOrigins = [domain];
     if (!domain.includes('localhost')) {
       allowedOrigins.push('http://localhost:3000');
     }
 
     await c.env.DB.prepare(
-      `INSERT INTO projects (id, name, public_write_key, allowed_origins, is_active)
-       VALUES (?, ?, ?, ?, 1);`
+      `INSERT INTO projects (id, name, public_write_key, allowed_origins, is_active, owner_id)
+       VALUES (?, ?, ?, ?, 1, ?);`
     )
-      .bind(projectId, name, writeKey, JSON.stringify(allowedOrigins))
+      .bind(projectId, name, writeKey, JSON.stringify(allowedOrigins), ownerId)
       .run();
 
-    return c.json({
-      success: true,
-      message: 'Project berhasil ditambahkan',
-      data: {
-        id: projectId,
-        name,
-        writeKey,
-        allowedOrigins,
-        isActive: true,
+    return c.json(
+      {
+        success: true,
+        message: 'Project berhasil didaftarkan',
+        data: {
+          id: projectId,
+          name,
+          writeKey,
+          allowedOrigins,
+          isActive: true,
+          ownerId,
+        },
       },
-    }, 201);
+      201
+    );
   } catch (error: any) {
     console.error('[Create Project Error]', error.message);
     return c.json({ success: false, error: error.message || 'Failed to create project' }, 500);
   }
-});
-
-// Health check endpoint
-app.get('/health', (c) => {
-  return c.json({ status: 'ok', engine: 'cloudflare-workers-d1', timestamp: new Date().toISOString() });
 });
 
 // GET /api/track/metrics
@@ -172,9 +511,10 @@ app.get('/api/track/events', async (c) => {
   }
 });
 
-// POST /api/track/click (Fire-and-forget background tracking)
+// -------------------------------------------------------------
+// POST /api/track/click (Public High-Performance Ingestion)
+// -------------------------------------------------------------
 app.post('/api/track/click', async (c) => {
-  // Capture client info
   const rawIp =
     c.req.header('cf-connecting-ip') ||
     c.req.header('x-forwarded-for')?.split(',')[0].trim() ||
@@ -205,7 +545,6 @@ app.post('/api/track/click', async (c) => {
   const writeKey = c.req.header('x-write-key') || body.writeKey || body.write_key;
   const originHeader = c.req.header('origin') || c.req.header('referer') || null;
 
-  // Background execution with c.executionCtx.waitUntil (Non-blocking response)
   const task = (async () => {
     try {
       if (isRateLimited(rawIp)) {
@@ -241,9 +580,7 @@ app.post('/api/track/click', async (c) => {
             console.warn(`[Security Rejected] Origin "${originHeader}" not whitelisted`);
             return;
           }
-        } catch {
-          // ignore parse error
-        }
+        } catch {}
       }
 
       if (!elementId || !pagePath) {
@@ -253,7 +590,7 @@ app.post('/api/track/click', async (c) => {
       const anonymized = anonymizeIp(rawIp);
       const userAgent = c.req.header('user-agent') || null;
 
-      // Atomic batch statement D1 (Mirip transaction)
+      // Atomic batch statement D1
       await c.env.DB.batch([
         c.env.DB.prepare(
           `INSERT INTO click_events (
@@ -291,7 +628,6 @@ app.post('/api/track/click', async (c) => {
     task.catch(() => {});
   }
 
-  // HTTP 204 No Content langsung kembali instan
   return c.body(null, 204);
 });
 
