@@ -38,8 +38,26 @@ export default function EventsPage() {
 
   useEffect(() => {
     fetchEvents();
-    const interval = setInterval(fetchEvents, 4000);
-    return () => clearInterval(interval);
+
+    // Smart Polling: Hanya fetch saat tab aktif dilihat pengguna
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchEvents();
+      }
+    }, 5000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchEvents();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [fetchEvents]);
 
   return (

@@ -36,8 +36,27 @@ export function MetricsLiveTable() {
 
   useEffect(() => {
     fetchMetrics();
-    const interval = setInterval(fetchMetrics, 3000);
-    return () => clearInterval(interval);
+
+    // Smart Polling: Hanya fetch saat tab aktif dilihat pengguna
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        fetchMetrics();
+      }
+    }, 4000);
+
+    // Langsung fetch data terbaru saat pengguna kembali membuka tab ini
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchMetrics();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [fetchMetrics]);
 
   return (
