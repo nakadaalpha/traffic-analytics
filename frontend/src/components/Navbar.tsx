@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
+import { Zap, ShoppingCart } from 'lucide-react';
 
 export function Navbar() {
   const [cartCount, setCartCount] = useState(3);
@@ -11,18 +12,21 @@ export function Navbar() {
   };
 
   return (
-    <nav className="w-full bg-slate-900 border-b border-slate-800 text-slate-100 sticky top-0 z-50">
+    <nav className="w-full bg-white border-b border-zinc-200 text-zinc-900 sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         <div className="flex items-center space-x-8">
-          <Link href="/" className="flex items-center space-x-2 text-xl font-bold text-sky-400">
-            <span>⚡ ClickTracker Pro</span>
+          <Link href="/" className="flex items-center space-x-2 text-base font-bold text-zinc-900">
+            <span className="p-1 rounded-md bg-zinc-900 text-white">
+              <Zap className="w-4 h-4" />
+            </span>
+            <span>ClickTracker Pro</span>
           </Link>
-          <div className="hidden md:flex space-x-6 text-sm font-medium">
-            <Link href="/" className="hover:text-sky-300 transition-colors">
-              Home
+          <div className="hidden md:flex space-x-6 text-xs font-medium text-zinc-600">
+            <Link href="/" className="hover:text-zinc-900 transition-colors">
+              Halaman Utama
             </Link>
-            <Link href="/profile" className="hover:text-sky-300 transition-colors">
-              User Profile
+            <Link href="/profile" className="hover:text-zinc-900 transition-colors">
+              Demo Profil
             </Link>
           </div>
         </div>
@@ -33,11 +37,12 @@ export function Navbar() {
             type="button"
             data-track-cta="navbar-cart-btn"
             onClick={handleCartClick}
-            className="relative px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 active:scale-95 text-white font-medium text-sm flex items-center gap-2 transition-all shadow-md shadow-sky-950"
+            className="relative px-3.5 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 active:scale-95 text-zinc-800 border border-zinc-200 font-medium text-xs flex items-center gap-2 transition-colors cursor-pointer"
             title="Keranjang Belanja"
           >
-            <span>🛒 Keranjang</span>
-            <span className="bg-white text-sky-800 rounded-full px-2 py-0.5 text-xs font-bold">
+            <ShoppingCart className="w-4 h-4 text-zinc-600" />
+            <span>Keranjang</span>
+            <span className="bg-zinc-900 text-white rounded-full px-1.5 py-0.2 text-[10px] font-bold">
               {cartCount}
             </span>
           </button>

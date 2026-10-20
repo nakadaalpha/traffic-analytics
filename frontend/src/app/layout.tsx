@@ -4,8 +4,8 @@ import ClickTracker from '@/components/analytics/ClickTracker';
 import { AuthProvider } from '@/context/AuthContext';
 
 export const metadata: Metadata = {
-  title: 'Custom Click & CTA Tracking Tool',
-  description: 'High-performance end-to-end Click & CTA Tracking with Cloudflare Workers (Hono & D1) and Next.js 16',
+  title: 'ClickTracker PRO | Enterprise CTA & Traffic Analytics',
+  description: 'Clean, light-mode, high-performance click and conversion tracking powered by Cloudflare Workers and Next.js 16',
 };
 
 export default function RootLayout({
@@ -15,9 +15,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="id">
-      <body className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased">
+      <body className="min-h-screen bg-zinc-50 text-zinc-900 font-sans antialiased selection:bg-zinc-900 selection:text-white">
         <AuthProvider>
-          {/* Global Client Tracker Listener aktif di seluruh halaman */}
           <ClickTracker />
           {children}
         </AuthProvider>

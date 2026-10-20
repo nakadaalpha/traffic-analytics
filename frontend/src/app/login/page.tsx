@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
+import { Zap, Eye, EyeOff, AlertCircle, ArrowRight, Loader2 } from 'lucide-react';
 
 export default function LoginPage() {
   const [identifier, setIdentifier] = useState('');
@@ -49,39 +50,36 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 selection:bg-sky-500 selection:text-white relative overflow-hidden">
-      {/* Background Glow */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[300px] bg-sky-600/15 blur-[120px] rounded-full pointer-events-none" />
-
-      <div className="w-full max-w-md relative z-10 space-y-6">
+    <div className="min-h-screen bg-zinc-50 text-zinc-900 flex items-center justify-center p-4">
+      <div className="w-full max-w-md space-y-6">
         {/* Header Branding */}
         <div className="text-center space-y-2">
           <Link href="/" className="inline-flex items-center gap-2">
-            <span className="p-2 rounded-xl bg-sky-500/20 text-sky-400 border border-sky-500/30 text-xl font-bold">
-              ⚡
+            <span className="p-2 rounded-lg bg-zinc-900 text-white">
+              <Zap className="w-5 h-5" />
             </span>
-            <span className="text-2xl font-black text-white tracking-tight">
-              ClickTracker <span className="text-sky-400 font-semibold text-xs px-2 py-0.5 rounded-full bg-sky-950 border border-sky-800">PRO</span>
+            <span className="text-2xl font-bold text-zinc-900 tracking-tight">
+              ClickTracker <span className="text-zinc-600 font-semibold text-xs px-2 py-0.5 rounded-md bg-zinc-100 border border-zinc-200">PRO</span>
             </span>
           </Link>
-          <h1 className="text-xl font-bold text-white tracking-tight">Masuk ke Platform</h1>
-          <p className="text-xs text-slate-400">
+          <h1 className="text-xl font-bold text-zinc-900 tracking-tight">Masuk ke Platform</h1>
+          <p className="text-xs text-zinc-500">
             Kelola proyek tracking dan amati performa konversi CTA secara real-time
           </p>
         </div>
 
         {/* Card Form */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-7 shadow-2xl space-y-5">
+        <div className="bg-white border border-zinc-200 rounded-xl p-7 shadow-sm space-y-5">
           {error && (
-            <div className="p-3.5 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs font-medium flex items-center gap-2">
-              <span>⚠️</span>
+            <div className="p-3.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
               <span>{error}</span>
             </div>
           )}
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
                 Email atau Username
               </label>
               <input
@@ -90,13 +88,13 @@ export default function LoginPage() {
                 onChange={(e) => setIdentifier(e.target.value)}
                 placeholder="admin@traffic.local atau superadmin"
                 required
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all font-mono"
+                className="w-full bg-white border border-zinc-300 rounded-lg px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-colors font-mono"
               />
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-semibold text-slate-300">Kata Sandi</label>
+                <label className="text-xs font-semibold text-zinc-700">Kata Sandi</label>
               </div>
               <div className="relative">
                 <input
@@ -105,25 +103,26 @@ export default function LoginPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   required
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all pr-10"
+                  className="w-full bg-white border border-zinc-300 rounded-lg px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-colors pr-10"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 text-xs font-medium"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 text-xs font-medium cursor-pointer"
+                  title={showPassword ? 'Sembunyikan sandi' : 'Tampilkan sandi'}
                 >
-                  {showPassword ? 'Sembunyi' : 'Lihat'}
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
 
             <div className="flex items-center justify-between text-xs pt-1">
-              <label className="flex items-center gap-2 text-slate-300 cursor-pointer select-none">
+              <label className="flex items-center gap-2 text-zinc-600 cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={rememberMe}
                   onChange={(e) => setRememberMe(e.target.checked)}
-                  className="rounded border-slate-700 bg-slate-950 text-sky-600 focus:ring-sky-500 w-3.5 h-3.5"
+                  className="rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 w-3.5 h-3.5"
                 />
                 <span>Ingat saya di perangkat ini</span>
               </label>
@@ -132,31 +131,28 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold text-xs py-3 px-4 rounded-xl shadow-lg shadow-sky-950 transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2 mt-2"
+              className="w-full bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium text-xs py-2.5 px-4 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2 mt-2"
             >
               {loading ? (
                 <>
-                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   <span>Memverifikasi...</span>
                 </>
               ) : (
-                <span>Masuk Sekarang &rarr;</span>
+                <>
+                  <span>Masuk Sekarang</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </>
               )}
             </button>
           </form>
 
-          <div className="pt-2 text-center border-t border-slate-800/80 text-xs text-slate-400">
+          <div className="pt-4 text-center border-t border-zinc-100 text-xs text-zinc-500">
             Belum memiliki akun?{' '}
-            <Link href="/register" className="text-sky-400 hover:text-sky-300 font-semibold underline">
-              Daftar di sini
+            <Link href="/register" className="text-zinc-900 hover:underline font-semibold">
+              Daftar akun baru
             </Link>
           </div>
-        </div>
-
-        <div className="text-center text-[11px] text-slate-500">
-          <Link href="/" className="hover:text-slate-400">
-            &larr; Kembali ke Landing Page
-          </Link>
         </div>
       </div>
     </div>

@@ -1,6 +1,17 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { 
+  BarChart3, 
+  RotateCw, 
+  Search, 
+  MousePointerClick, 
+  Clock, 
+  CheckCircle2, 
+  ShieldCheck,
+  TrendingUp,
+  FolderOpen
+} from 'lucide-react';
 
 interface MetricRow {
   project_id: string;
@@ -22,6 +33,7 @@ export function MetricsLiveTable() {
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [selectedProject, setSelectedProject] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // 1. Ambil daftar project milik user yang login dari API
   const fetchUserProjects = useCallback(async () => {
@@ -35,7 +47,6 @@ export function MetricsLiveTable() {
         const list: ProjectOption[] = json.data || [];
         setProjects(list);
         if (list.length > 0 && !selectedProject) {
-          // Pilih project milik user (prioritaskan yang bukan demo jika ada)
           const userProject = list.find((p) => p.ownerId !== null) || list[0];
           setSelectedProject(userProject.id);
         }
@@ -97,95 +108,214 @@ export function MetricsLiveTable() {
     };
   }, [fetchMetrics, selectedProject]);
 
+  // Kalkulasi Ringkasan KPI
+  const { totalAllClicks, maxClicks, topCta, filteredMetrics } = useMemo(() => {
+    let sum = 0;
+    let max = 1;
+    let top: MetricRow | null = null;
+
+    metrics.forEach((m) => {
+      const count = Number(m.total_clicks) || 0;
+      sum += count;
+      if (count > max) max = count;
+      if (!top || count > (Number(top.total_clicks) || 0)) {
+        top = m;
+      }
+    });
+
+    const filtered = metrics.filter(
+      (m) =>
+        m.element_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        m.page_path.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    return { totalAllClicks: sum, maxClicks: max, topCta: top, filteredMetrics: filtered };
+  }, [metrics, searchQuery]);
+
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl">
-      <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl font-bold text-white flex items-center gap-2">
-              <span>📊</span> Live CTA Metrics (Multi-Tenant)
-            </h2>
-            {selectedProject && (
-              <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-sky-950 text-sky-300 border border-sky-800">
-                Project: {selectedProject}
-              </span>
-            )}
+    <div className="space-y-6">
+      {/* KPI Highlight Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-medium">Total Klik Terkumpul</span>
+            <MousePointerClick className="w-4 h-4 text-zinc-400" />
           </div>
-          <p className="text-xs text-slate-400 mt-1">
-            Data terisolasi secara aman per client/project di tabel <code className="text-sky-300">cta_metrics</code>
-          </p>
+          <div className="text-2xl font-black text-zinc-900 tracking-tight">{totalAllClicks}</div>
+          <div className="text-[11px] text-zinc-500 flex items-center gap-1 pt-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span>Teragregasi real-time</span>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <select
-            value={selectedProject}
-            onChange={(e) => setSelectedProject(e.target.value)}
-            className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-mono"
-          >
-            {projects.map((proj) => (
-              <option key={proj.id} value={proj.id}>
-                {proj.name} ({proj.id})
-              </option>
-            ))}
-          </select>
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-medium">Elemen CTA Aktif</span>
+            <TrendingUp className="w-4 h-4 text-zinc-400" />
+          </div>
+          <div className="text-2xl font-black text-zinc-900 tracking-tight">{metrics.length}</div>
+          <div className="text-[11px] text-zinc-500">Tombol atau link terpantau</div>
+        </div>
 
-          <button
-            onClick={fetchMetrics}
-            disabled={loading}
-            className="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition-colors flex items-center gap-1.5 cursor-pointer"
-          >
-            <span>{loading ? '⟳ Memuat...' : '↻ Segarkan'}</span>
-          </button>
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-medium">Top Performing CTA</span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+          </div>
+          <div className="text-sm font-bold text-zinc-900 truncate font-mono" title={(topCta as any)?.element_id || '-'}>
+            {(topCta as any)?.element_id || '-'}
+          </div>
+          <div className="text-[11px] text-zinc-500">
+            {topCta ? `${(topCta as any).total_clicks} klik tercatat` : 'Belum ada data'}
+          </div>
+        </div>
+
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-medium">Sinkronisasi Terakhir</span>
+            <Clock className="w-4 h-4 text-zinc-400" />
+          </div>
+          <div className="text-sm font-bold text-zinc-900 font-mono">
+            {lastRefreshed ? lastRefreshed.toLocaleTimeString('id-ID') : '-'}
+          </div>
+          <div className="text-[11px] text-zinc-500 flex items-center gap-1">
+            <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
+            <span>Smart Polling Aktif</span>
+          </div>
         </div>
       </div>
 
-      {metrics.length === 0 ? (
-        <div className="py-8 text-center text-slate-500 text-sm border border-dashed border-slate-800 rounded-lg">
-          Belum ada event klik untuk project <code className="text-sky-400 font-mono">{selectedProject}</code>.
-          Silakan pasang script dan klik tombol CTA di website Anda!
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm text-slate-300">
-            <thead className="text-xs uppercase bg-slate-800/80 text-slate-400 border-b border-slate-700">
-              <tr>
-                <th className="px-4 py-3 font-semibold">Project ID</th>
-                <th className="px-4 py-3 font-semibold">Element ID</th>
-                <th className="px-4 py-3 font-semibold">Page Path</th>
-                <th className="px-4 py-3 font-semibold text-center">Total Clicks</th>
-                <th className="px-4 py-3 font-semibold text-right">Terakhir Diklik</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {metrics.map((row, idx) => (
-                <tr key={`${row.project_id}-${row.element_id}-${idx}`} className="hover:bg-slate-800/50 transition-colors">
-                  <td className="px-4 py-3 font-mono text-xs text-sky-400">{row.project_id}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-200 font-medium">
-                    {row.element_id}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-400">{row.page_path}</td>
-                  <td className="px-4 py-3 text-center">
-                    <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
-                      {row.total_clicks}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono text-xs text-slate-400">
-                    {new Date(row.last_clicked_at).toLocaleTimeString('id-ID')}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Main Table Card */}
+      <div className="bg-white border border-zinc-200 rounded-xl shadow-sm overflow-hidden">
+        {/* Table Control Header */}
+        <div className="p-5 border-b border-zinc-200 flex flex-wrap items-center justify-between gap-4 bg-white">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-zinc-800" />
+              <h2 className="text-base font-bold text-zinc-900">Performa Metrik CTA Real-Time</h2>
+            </div>
+            <p className="text-xs text-zinc-500">
+              Data klik terisolasi per proyek dan disimpan pada Cloudflare D1.
+            </p>
+          </div>
 
-      <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between text-xs text-slate-500">
-        <div className="flex items-center gap-1.5">
-          <span>🛡️</span>
-          <span>IP Masking &amp; Origin Whitelist Active</span>
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Project Selector */}
+            <div className="flex items-center gap-1.5 bg-zinc-50 border border-zinc-200 rounded-lg px-2.5 py-1.5">
+              <FolderOpen className="w-3.5 h-3.5 text-zinc-500" />
+              <select
+                value={selectedProject}
+                onChange={(e) => setSelectedProject(e.target.value)}
+                className="bg-transparent text-xs font-semibold text-zinc-800 focus:outline-none cursor-pointer"
+              >
+                {projects.map((proj) => (
+                  <option key={proj.id} value={proj.id}>
+                    {proj.name} ({proj.id})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Search Filter */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Cari tombol..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-40 sm:w-48 pl-8 pr-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-400 focus:bg-white transition-all font-mono"
+              />
+            </div>
+
+            {/* Refresh Button */}
+            <button
+              type="button"
+              onClick={fetchMetrics}
+              disabled={loading}
+              className="px-3 py-1.5 text-xs font-medium bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white rounded-lg shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-[0.98]"
+            >
+              <RotateCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{loading ? 'Memuat...' : 'Segarkan'}</span>
+            </button>
+          </div>
         </div>
-        <div>
-          {lastRefreshed ? `Sinkronisasi: ${lastRefreshed.toLocaleTimeString('id-ID')}` : 'Belum sinkron'}
+
+        {/* Table View */}
+        {filteredMetrics.length === 0 ? (
+          <div className="py-12 px-4 text-center space-y-2">
+            <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center mx-auto text-zinc-400">
+              <MousePointerClick className="w-5 h-5" />
+            </div>
+            <div className="text-sm font-semibold text-zinc-800">Belum ada aktivitas klik</div>
+            <p className="text-xs text-zinc-500 max-w-sm mx-auto">
+              Tidak ada data klik yang ditemukan untuk project{' '}
+              <code className="px-1.5 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-800 font-mono text-[11px]">
+                {selectedProject || 'ini'}
+              </code>
+              . Pastikan script telah dipasang di website Anda.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-zinc-700">
+              <thead className="text-[11px] uppercase tracking-wider bg-zinc-50 text-zinc-500 border-b border-zinc-200">
+                <tr>
+                  <th className="px-5 py-3 font-semibold">Element ID (CTA)</th>
+                  <th className="px-5 py-3 font-semibold">Path Halaman</th>
+                  <th className="px-5 py-3 font-semibold">Distribusi Visual</th>
+                  <th className="px-5 py-3 font-semibold text-center">Total Klik</th>
+                  <th className="px-5 py-3 font-semibold text-right">Terakhir Diklik</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-200 bg-white">
+                {filteredMetrics.map((row, idx) => {
+                  const clickCount = Number(row.total_clicks) || 0;
+                  const ratio = Math.round((clickCount / maxClicks) * 100);
+
+                  return (
+                    <tr key={`${row.project_id}-${row.element_id}-${idx}`} className="hover:bg-zinc-50/80 transition-colors">
+                      <td className="px-5 py-3.5">
+                        <div className="font-mono text-zinc-900 font-semibold">{row.element_id}</div>
+                        <div className="text-[11px] text-zinc-400 font-mono">{row.project_id}</div>
+                      </td>
+                      <td className="px-5 py-3.5 font-mono text-zinc-600">{row.page_path}</td>
+                      <td className="px-5 py-3.5 w-44">
+                        <div className="space-y-1">
+                          <div className="h-1.5 w-full bg-zinc-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-zinc-900 rounded-full transition-all duration-500"
+                              style={{ width: `${ratio}%` }}
+                            />
+                          </div>
+                          <div className="text-[10px] text-zinc-400 font-mono">{ratio}% dari tombol tertinggi</div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5 text-center">
+                        <span className="inline-flex items-center justify-center min-w-8 px-2 py-0.5 rounded-full text-xs font-bold bg-zinc-100 text-zinc-900 border border-zinc-300">
+                          {row.total_clicks}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 text-right font-mono text-zinc-500">
+                        {new Date(row.last_clicked_at).toLocaleTimeString('id-ID')}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Footer Meta */}
+        <div className="p-4 border-t border-zinc-200 bg-zinc-50/50 flex flex-wrap items-center justify-between text-xs text-zinc-500">
+          <div className="flex items-center gap-1.5">
+            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            <span>GDPR IP Masking &amp; Origin Whitelist Aktif</span>
+          </div>
+          <div>
+            Menampilkan {filteredMetrics.length} dari {metrics.length} elemen
+          </div>
         </div>
       </div>
     </div>

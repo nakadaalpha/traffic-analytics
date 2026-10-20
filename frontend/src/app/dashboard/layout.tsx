@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import Sidebar from '@/components/layout/Sidebar';
 import TopHeader from '@/components/layout/TopHeader';
+import { Loader2 } from 'lucide-react';
 
 export default function DashboardLayout({
   children,
@@ -22,19 +23,19 @@ export default function DashboardLayout({
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center space-y-4">
-        <div className="w-8 h-8 border-2 border-sky-500/20 border-t-sky-500 rounded-full animate-spin" />
-        <span className="text-xs text-slate-400 font-mono">Memverifikasi sesi keamanan...</span>
+      <div className="min-h-screen bg-zinc-50 flex flex-col items-center justify-center space-y-3">
+        <Loader2 className="w-6 h-6 text-zinc-900 animate-spin" />
+        <span className="text-xs text-zinc-500 font-mono">Memverifikasi sesi keamanan...</span>
       </div>
     );
   }
 
   if (!user) {
-    return null; // Will redirect in useEffect
+    return null;
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
+    <div className="min-h-screen bg-zinc-50 text-zinc-900">
       {/* Sidebar Navigasi Dashboard */}
       <Sidebar />
 
@@ -46,8 +47,8 @@ export default function DashboardLayout({
           {children}
         </main>
 
-        <footer className="border-t border-slate-900 bg-slate-950/80 py-4 px-6 text-center text-xs text-slate-500">
-          ClickTracker Pro &bull; Cloudflare Workers (Hono &amp; D1) &bull; Multi-Tenant &amp; JWT Auth
+        <footer className="border-t border-zinc-200 bg-white py-4 px-6 text-center text-xs text-zinc-500">
+          ClickTracker PRO &bull; Cloudflare Workers (Hono &amp; D1) &bull; Clean Monochrome Interface
         </footer>
       </div>
     </div>

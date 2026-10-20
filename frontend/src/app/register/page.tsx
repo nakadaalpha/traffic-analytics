@@ -3,6 +3,7 @@
 import React, { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { Zap, Eye, EyeOff, AlertCircle, ArrowRight, Loader2, CheckCircle2 } from 'lucide-react';
 
 export default function RegisterPage() {
   const [name, setName] = useState('');
@@ -26,7 +27,7 @@ export default function RegisterPage() {
 
     if (score <= 1) return { score: 1, label: 'Lemah', color: 'bg-rose-500' };
     if (score === 2 || score === 3) return { score: 2, label: 'Sedang', color: 'bg-amber-500' };
-    return { score: 3, label: 'Kuat', color: 'bg-emerald-500' };
+    return { score: 3, label: 'Kuat', color: 'bg-emerald-600' };
   }, [password]);
 
   const handleRegister = async (e: React.FormEvent) => {
@@ -67,63 +68,60 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 selection:bg-sky-500 selection:text-white relative overflow-hidden">
-      {/* Background Glow */}
-      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[300px] bg-teal-600/15 blur-[120px] rounded-full pointer-events-none" />
-
-      <div className="w-full max-w-md relative z-10 space-y-6">
+    <div className="min-h-screen bg-zinc-50 text-zinc-900 flex items-center justify-center p-4">
+      <div className="w-full max-w-md space-y-6">
         {/* Header Branding */}
         <div className="text-center space-y-2">
           <Link href="/" className="inline-flex items-center gap-2">
-            <span className="p-2 rounded-xl bg-sky-500/20 text-sky-400 border border-sky-500/30 text-xl font-bold">
-              ⚡
+            <span className="p-2 rounded-lg bg-zinc-900 text-white">
+              <Zap className="w-5 h-5" />
             </span>
-            <span className="text-2xl font-black text-white tracking-tight">
-              ClickTracker <span className="text-sky-400 font-semibold text-xs px-2 py-0.5 rounded-full bg-sky-950 border border-sky-800">PRO</span>
+            <span className="text-2xl font-bold text-zinc-900 tracking-tight">
+              ClickTracker <span className="text-zinc-600 font-semibold text-xs px-2 py-0.5 rounded-md bg-zinc-100 border border-zinc-200">PRO</span>
             </span>
           </Link>
-          <h1 className="text-xl font-bold text-white tracking-tight">Buat Akun Pengelola</h1>
-          <p className="text-xs text-slate-400">
-            Daftarkan akun untuk mengelola proyek website dan mengamankan dasbor analitik
+          <h1 className="text-xl font-bold text-zinc-900 tracking-tight">Buat Akun Pengelola</h1>
+          <p className="text-xs text-zinc-500">
+            Daftarkan akun untuk mengelola proyek website dan dasbor analitik
           </p>
         </div>
 
         {/* Card Form */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-7 shadow-2xl space-y-5">
+        <div className="bg-white border border-zinc-200 rounded-xl p-7 shadow-sm space-y-5">
           {error && (
-            <div className="p-3.5 rounded-xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs font-medium flex items-center gap-2">
-              <span>⚠️</span>
+            <div className="p-3.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
               <span>{error}</span>
             </div>
           )}
 
           <form onSubmit={handleRegister} className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Nama Lengkap</label>
+              <label className="block text-xs font-semibold text-zinc-700 mb-1.5">Nama Lengkap</label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Muhammad Alpha"
                 required
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all"
+                className="w-full bg-white border border-zinc-300 rounded-lg px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-colors"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">Alamat Email</label>
+              <label className="block text-xs font-semibold text-zinc-700 mb-1.5">Alamat Email</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="alpha@domain.com"
                 required
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all font-mono"
+                className="w-full bg-white border border-zinc-300 rounded-lg px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-colors font-mono"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              <label className="block text-xs font-semibold text-zinc-700 mb-1.5">
                 Username (Alfanumerik)
               </label>
               <input
@@ -133,13 +131,13 @@ export default function RegisterPage() {
                 placeholder="alpha_dev"
                 required
                 minLength={3}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all font-mono"
+                className="w-full bg-white border border-zinc-300 rounded-lg px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-colors font-mono"
               />
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-semibold text-slate-300">Kata Sandi (Min. 8 Karakter)</label>
+                <label className="text-xs font-semibold text-zinc-700">Kata Sandi (Min. 8 Karakter)</label>
               </div>
               <div className="relative">
                 <input
@@ -148,29 +146,29 @@ export default function RegisterPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   required
-                  minLength={8}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500 transition-all pr-10"
+                  className="w-full bg-white border border-zinc-300 rounded-lg px-3.5 py-2.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 focus:ring-1 focus:ring-zinc-900 transition-colors pr-10"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 text-xs font-medium"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 text-xs font-medium cursor-pointer"
+                  title={showPassword ? 'Sembunyikan sandi' : 'Tampilkan sandi'}
                 >
-                  {showPassword ? 'Sembunyi' : 'Lihat'}
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
 
-              {/* Password Strength Indicator */}
+              {/* Password strength meter */}
               {password && (
                 <div className="mt-2 space-y-1">
-                  <div className="flex items-center justify-between text-[10px]">
-                    <span className="text-slate-400">Kekuatan:</span>
-                    <span className="font-semibold text-slate-300">{passwordStrength.label}</span>
+                  <div className="flex gap-1.5 h-1">
+                    <div className={`flex-1 rounded-full ${passwordStrength.score >= 1 ? passwordStrength.color : 'bg-zinc-200'}`} />
+                    <div className={`flex-1 rounded-full ${passwordStrength.score >= 2 ? passwordStrength.color : 'bg-zinc-200'}`} />
+                    <div className={`flex-1 rounded-full ${passwordStrength.score >= 3 ? passwordStrength.color : 'bg-zinc-200'}`} />
                   </div>
-                  <div className="grid grid-cols-3 gap-1.5 h-1.5 bg-slate-800 rounded-full overflow-hidden p-0.5">
-                    <div className={`h-full rounded-full ${passwordStrength.score >= 1 ? passwordStrength.color : 'opacity-0'}`} />
-                    <div className={`h-full rounded-full ${passwordStrength.score >= 2 ? passwordStrength.color : 'opacity-0'}`} />
-                    <div className={`h-full rounded-full ${passwordStrength.score >= 3 ? passwordStrength.color : 'opacity-0'}`} />
+                  <div className="text-[10px] text-zinc-500 flex justify-between">
+                    <span>Kekuatan kata sandi</span>
+                    <span className="font-medium text-zinc-700">{passwordStrength.label}</span>
                   </div>
                 </div>
               )}
@@ -179,31 +177,28 @@ export default function RegisterPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs py-3 px-4 rounded-xl shadow-lg shadow-emerald-950 transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2 mt-2"
+              className="w-full bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium text-xs py-2.5 px-4 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-2 mt-4"
             >
               {loading ? (
                 <>
-                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Mendaftarkan akun...</span>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Mendaftarkan...</span>
                 </>
               ) : (
-                <span>Daftar Akun Sekarang &rarr;</span>
+                <>
+                  <span>Daftar Akun Baru</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </>
               )}
             </button>
           </form>
 
-          <div className="pt-2 text-center border-t border-slate-800/80 text-xs text-slate-400">
+          <div className="pt-4 text-center border-t border-zinc-100 text-xs text-zinc-500">
             Sudah memiliki akun?{' '}
-            <Link href="/login" className="text-sky-400 hover:text-sky-300 font-semibold underline">
+            <Link href="/login" className="text-zinc-900 hover:underline font-semibold">
               Masuk di sini
             </Link>
           </div>
-        </div>
-
-        <div className="text-center text-[11px] text-slate-500">
-          <Link href="/" className="hover:text-slate-400">
-            &larr; Kembali ke Landing Page
-          </Link>
         </div>
       </div>
     </div>
