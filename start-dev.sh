@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Custom Click & CTA Tracking Tool - Runner Script
+# Custom Click & CTA Tracking Tool - Runner Script (Cloudflare Workers + Next.js)
 echo "=========================================================="
 echo "⚡ Starting Custom Click & CTA Tracking Fullstack Environment"
 echo "=========================================================="
@@ -8,8 +8,8 @@ echo "=========================================================="
 # Matikan child processes saat script di-close (Ctrl+C)
 trap "kill 0" EXIT
 
-# 1. Jalankan Backend (Port 5000)
-echo "🚀 [1/2] Launching Express.js Tracking Backend on port 5000..."
+# 1. Jalankan Backend Cloudflare Workers (Port 5000)
+echo "🚀 [1/2] Launching Cloudflare Workers Backend on port 5000..."
 npm run dev --workspace=backend &
 BACKEND_PID=$!
 
