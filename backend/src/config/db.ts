@@ -17,26 +17,32 @@ pool.on('error', (err) => {
 });
 
 /**
- * Helper untuk menjalankan migrasi skrip SQL (001_create_tracking_tables.sql)
+ * Helper untuk menjalankan seluruh skrip SQL migrasi berurutan
  */
 export async function runMigrations(): Promise<void> {
-  const migrationPath = path.join(__dirname, '../db/migrations/001_create_tracking_tables.sql');
-  if (!fs.existsSync(migrationPath)) {
-    console.warn(`[Migration] File not found at ${migrationPath}`);
+  const migrationsDir = path.join(__dirname, '../db/migrations');
+  if (!fs.existsSync(migrationsDir)) {
+    console.warn(`[Migration] Directory not found at ${migrationsDir}`);
     return;
   }
 
-  const sql = fs.readFileSync(migrationPath, 'utf8');
+  const migrationFiles = fs
+    .readdirSync(migrationsDir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+
+  const client = await pool.connect();
   try {
-    const client = await pool.connect();
-    try {
-      console.log('[Migration] Applying database migrations...');
+    for (const file of migrationFiles) {
+      const filePath = path.join(migrationsDir, file);
+      console.log(`[Migration] Applying ${file}...`);
+      const sql = fs.readFileSync(filePath, 'utf8');
       await client.query(sql);
-      console.log('[Migration] Migrations applied successfully.');
-    } finally {
-      client.release();
     }
+    console.log('[Migration] All migrations applied successfully.');
   } catch (error: any) {
     console.error('[Migration Error] Could not apply migrations:', error.message);
+  } finally {
+    client.release();
   }
 }
