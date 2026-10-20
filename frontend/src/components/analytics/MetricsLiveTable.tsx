@@ -10,22 +10,60 @@ interface MetricRow {
   last_clicked_at: string;
 }
 
+interface ProjectOption {
+  id: string;
+  name: string;
+  ownerId?: string | null;
+}
+
 export function MetricsLiveTable() {
   const [metrics, setMetrics] = useState<MetricRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
-  const [selectedProject, setSelectedProject] = useState('prj_default');
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [selectedProject, setSelectedProject] = useState('');
 
+  // 1. Ambil daftar project milik user yang login dari API
+  const fetchUserProjects = useCallback(async () => {
+    try {
+      const res = await fetch('/api/track/projects', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        const json = await res.json();
+        const list: ProjectOption[] = json.data || [];
+        setProjects(list);
+        if (list.length > 0 && !selectedProject) {
+          // Pilih project milik user (prioritaskan yang bukan demo jika ada)
+          const userProject = list.find((p) => p.ownerId !== null) || list[0];
+          setSelectedProject(userProject.id);
+        }
+      }
+    } catch (err) {
+      console.warn('[LiveTable] Failed to fetch projects:', err);
+    }
+  }, [selectedProject]);
+
+  useEffect(() => {
+    fetchUserProjects();
+  }, [fetchUserProjects]);
+
+  // 2. Ambil metrik untuk project terpilih
   const fetchMetrics = useCallback(async () => {
+    if (!selectedProject) return;
     try {
       setLoading(true);
       const res = await fetch(`/api/track/metrics?projectId=${encodeURIComponent(selectedProject)}`, {
+        credentials: 'include',
         cache: 'no-store',
       });
       if (res.ok) {
         const json = await res.json();
         setMetrics(json.data || []);
         setLastRefreshed(new Date());
+      } else {
+        setMetrics([]);
       }
     } catch (err) {
       console.warn('[LiveTable] Failed to fetch metrics:', err);
@@ -35,16 +73,16 @@ export function MetricsLiveTable() {
   }, [selectedProject]);
 
   useEffect(() => {
-    fetchMetrics();
+    if (selectedProject) {
+      fetchMetrics();
+    }
 
-    // Smart Polling: Hanya fetch saat tab aktif dilihat pengguna
     const interval = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         fetchMetrics();
       }
     }, 4000);
 
-    // Langsung fetch data terbaru saat pengguna kembali membuka tab ini
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         fetchMetrics();
@@ -57,7 +95,7 @@ export function MetricsLiveTable() {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [fetchMetrics]);
+  }, [fetchMetrics, selectedProject]);
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl">
@@ -67,9 +105,11 @@ export function MetricsLiveTable() {
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
               <span>📊</span> Live CTA Metrics (Multi-Tenant)
             </h2>
-            <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-sky-950 text-sky-300 border border-sky-800">
-              Project: {selectedProject}
-            </span>
+            {selectedProject && (
+              <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-sky-950 text-sky-300 border border-sky-800">
+                Project: {selectedProject}
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-400 mt-1">
             Data terisolasi secara aman per client/project di tabel <code className="text-sky-300">cta_metrics</code>
@@ -82,14 +122,17 @@ export function MetricsLiveTable() {
             onChange={(e) => setSelectedProject(e.target.value)}
             className="text-xs bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500 font-mono"
           >
-            <option value="prj_default">prj_default (Default Web)</option>
-            <option value="prj_shop_klien">prj_shop_klien (Demo Client)</option>
+            {projects.map((proj) => (
+              <option key={proj.id} value={proj.id}>
+                {proj.name} ({proj.id})
+              </option>
+            ))}
           </select>
 
           <button
             onClick={fetchMetrics}
             disabled={loading}
-            className="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition-colors flex items-center gap-1.5"
+            className="px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition-colors flex items-center gap-1.5 cursor-pointer"
           >
             <span>{loading ? '⟳ Memuat...' : '↻ Segarkan'}</span>
           </button>
@@ -99,7 +142,7 @@ export function MetricsLiveTable() {
       {metrics.length === 0 ? (
         <div className="py-8 text-center text-slate-500 text-sm border border-dashed border-slate-800 rounded-lg">
           Belum ada event klik untuk project <code className="text-sky-400 font-mono">{selectedProject}</code>.
-          Silakan klik tombol di Navbar, Beranda, atau Halaman Profil!
+          Silakan pasang script dan klik tombol CTA di website Anda!
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -110,30 +153,24 @@ export function MetricsLiveTable() {
                 <th className="px-4 py-3 font-semibold">Element ID</th>
                 <th className="px-4 py-3 font-semibold">Page Path</th>
                 <th className="px-4 py-3 font-semibold text-center">Total Clicks</th>
-                <th className="px-4 py-3 font-semibold">Terakhir Diklik</th>
+                <th className="px-4 py-3 font-semibold text-right">Terakhir Diklik</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
-              {metrics.map((row) => (
-                <tr key={`${row.project_id}-${row.element_id}-${row.page_path}`} className="hover:bg-slate-800/40">
-                  <td className="px-4 py-3 font-mono text-emerald-400 text-xs">
-                    {row.project_id}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-sky-400 font-medium">
+              {metrics.map((row, idx) => (
+                <tr key={`${row.project_id}-${row.element_id}-${idx}`} className="hover:bg-slate-800/50 transition-colors">
+                  <td className="px-4 py-3 font-mono text-xs text-sky-400">{row.project_id}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-200 font-medium">
                     {row.element_id}
                   </td>
-                  <td className="px-4 py-3 font-mono text-slate-300">{row.page_path}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-slate-400">{row.page_path}</td>
                   <td className="px-4 py-3 text-center">
-                    <span className="inline-block px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800/60 font-bold text-xs">
+                    <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
                       {row.total_clicks}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-400">
-                    {new Date(row.last_clicked_at).toLocaleTimeString('id-ID', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      second: '2-digit',
-                    })}
+                  <td className="px-4 py-3 text-right font-mono text-xs text-slate-400">
+                    {new Date(row.last_clicked_at).toLocaleTimeString('id-ID')}
                   </td>
                 </tr>
               ))}
@@ -142,16 +179,15 @@ export function MetricsLiveTable() {
         </div>
       )}
 
-      {lastRefreshed && (
-        <div className="flex items-center justify-between text-[11px] text-slate-500 mt-3 pt-2 border-t border-slate-800/80">
-          <span className="text-emerald-400/90 font-mono">
-            🛡️ IP Masking &amp; Origin Whitelist Active
-          </span>
-          <span>
-            Sinkronisasi: {lastRefreshed.toLocaleTimeString('id-ID')}
-          </span>
+      <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between text-xs text-slate-500">
+        <div className="flex items-center gap-1.5">
+          <span>🛡️</span>
+          <span>IP Masking &amp; Origin Whitelist Active</span>
         </div>
-      )}
+        <div>
+          {lastRefreshed ? `Sinkronisasi: ${lastRefreshed.toLocaleTimeString('id-ID')}` : 'Belum sinkron'}
+        </div>
+      </div>
     </div>
   );
 }

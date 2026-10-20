@@ -373,16 +373,47 @@ app.get('/api/auth/me', authMiddleware, (c) => {
   return c.json({ success: true, data: user });
 });
 
+// Helper untuk mengekstrak identitas user dari cookie atau Authorization header
+async function extractCurrentUser(c: any): Promise<{ id: string; username: string; email: string } | null> {
+  try {
+    const token =
+      getCookie(c, 'auth_token') ||
+      c.req.header('Authorization')?.replace(/^Bearer\s+/i, '');
+    if (!token) return null;
+    const payload = (await verify(token, getJwtSecret(c), 'HS256')) as any;
+    if (!payload || !payload.sub) return null;
+    return {
+      id: payload.sub,
+      username: payload.username,
+      email: payload.email,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // -------------------------------------------------------------
-// Project & Metrics Endpoints (Protected by Auth for Admin)
+// Project & Metrics Endpoints (Protected & User-Isolated)
 // -------------------------------------------------------------
 
-// GET /api/track/projects
+// GET /api/track/projects (Hanya menampilkan project milik user yang sedang login)
 app.get('/api/track/projects', async (c) => {
   try {
-    const { results } = await c.env.DB.prepare(
-      `SELECT id, name, public_write_key, allowed_origins, is_active, owner_id, created_at FROM projects ORDER BY created_at DESC;`
-    ).all();
+    const currentUser = await extractCurrentUser(c);
+
+    let query = `SELECT id, name, public_write_key, allowed_origins, is_active, owner_id, created_at FROM projects `;
+    const params: any[] = [];
+
+    if (currentUser) {
+      // Tampilkan project milik user yang login, ATAU project demo bawaan (owner_id IS NULL)
+      query += `WHERE owner_id = ? OR owner_id IS NULL ORDER BY created_at DESC;`;
+      params.push(currentUser.id);
+    } else {
+      // Jika belum login, hanya boleh melihat demo
+      query += `WHERE owner_id IS NULL ORDER BY created_at DESC;`;
+    }
+
+    const { results } = await c.env.DB.prepare(query).bind(...params).all();
 
     const formatted = results.map((row: any) => {
       let origins = [];
@@ -409,20 +440,11 @@ app.get('/api/track/projects', async (c) => {
   }
 });
 
-// POST /api/track/projects
+// POST /api/track/projects (Wajib terikat ke owner_id user yang sedang login)
 app.post('/api/track/projects', async (c) => {
   try {
-    // Opsional cek auth jika ada sesi
-    let ownerId: string | null = null;
-    const token =
-      getCookie(c, 'auth_token') ||
-      c.req.header('Authorization')?.replace(/^Bearer\s+/i, '');
-    if (token) {
-      try {
-        const payload = (await verify(token, getJwtSecret(c), 'HS256')) as any;
-        if (payload && payload.sub) ownerId = payload.sub;
-      } catch {}
-    }
+    const currentUser = await extractCurrentUser(c);
+    const ownerId = currentUser ? currentUser.id : null;
 
     const body = await c.req.json().catch(() => ({}));
     const name = (body.name || '').trim();
@@ -469,10 +491,24 @@ app.post('/api/track/projects', async (c) => {
   }
 });
 
-// GET /api/track/metrics
+// GET /api/track/metrics (Cek kepemilikan project sebelum menampilkan)
 app.get('/api/track/metrics', async (c) => {
   try {
     const projectId = c.req.query('projectId') || 'prj_default';
+    const currentUser = await extractCurrentUser(c);
+
+    // Verifikasi kepemilikan project di D1
+    const project = await c.env.DB.prepare(`SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`)
+      .bind(projectId)
+      .first<any>();
+
+    if (project && project.owner_id) {
+      // Jika project memiliki pemilik, pastikan user yang login adalah pemiliknya
+      if (!currentUser || currentUser.id !== project.owner_id) {
+        return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses ke project ini' }, 403);
+      }
+    }
+
     const { results } = await c.env.DB.prepare(
       `SELECT project_id, element_id, page_path, CAST(total_clicks AS TEXT) as total_clicks, last_clicked_at 
        FROM cta_metrics 
@@ -490,10 +526,23 @@ app.get('/api/track/metrics', async (c) => {
   }
 });
 
-// GET /api/track/events
+// GET /api/track/events (Cek kepemilikan project sebelum menampilkan)
 app.get('/api/track/events', async (c) => {
   try {
     const projectId = c.req.query('projectId') || 'prj_default';
+    const currentUser = await extractCurrentUser(c);
+
+    // Verifikasi kepemilikan project di D1
+    const project = await c.env.DB.prepare(`SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`)
+      .bind(projectId)
+      .first<any>();
+
+    if (project && project.owner_id) {
+      if (!currentUser || currentUser.id !== project.owner_id) {
+        return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses ke project ini' }, 403);
+      }
+    }
+
     const { results } = await c.env.DB.prepare(
       `SELECT CAST(id AS TEXT) as id, project_id, element_id, page_path, session_id, user_id, user_agent, ip_address, created_at 
        FROM click_events 
