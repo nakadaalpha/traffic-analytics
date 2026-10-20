@@ -1,0 +1,28 @@
+{
+  "name": "custom-click-cta-tracking-system",
+  "version": "1.0.0",
+  "description": "Custom Click & CTA Tracking Tool end-to-end with Next.js 16, Express.js, and PostgreSQL",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "./start-dev.sh",
+    "build": "npm run build --workspace=backend && npm run build --workspace=frontend",
+    "build:backend": "npm run build --workspace=backend",
+    "build:frontend": "npm run build --workspace=frontend",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend"
+  },
+  "keywords": [
+    "nextjs16",
+    "express",
+    "postgresql",
+    "cta-tracking",
+    "analytics",
+    "beacon-api"
+  ],
+  "author": "",
+  "license": "MIT"
+}
