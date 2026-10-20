@@ -157,7 +157,9 @@ app.post('/api/track/click', async (c) => {
       if (originHeader && project.allowed_origins) {
         try {
           const allowedList: string[] = JSON.parse(project.allowed_origins);
-          const isAllowed = allowedList.some((allowed) => originHeader.startsWith(allowed));
+          const isAllowed =
+            allowedList.includes('*') ||
+            allowedList.some((allowed) => allowed === '*' || originHeader.startsWith(allowed));
           if (!isAllowed) {
             console.warn(`[Security Rejected] Origin "${originHeader}" not whitelisted`);
             return;
