@@ -6,4 +6,4 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "traffic_analytics_db"
-database_id = "REPLACE_WITH_YOUR_ACTUAL_D1_DATABASE_ID"
+database_id = "3e7b6518-8ad8-4030-8677-c58f8c5460cf"
