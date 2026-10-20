@@ -7,13 +7,17 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "db:migrate": "ts-node src/db/migrate.ts"
+    "db:migrate": "ts-node src/db/migrate.ts",
+    "deploy:cf": "wrangler deploy",
+    "d1:migrate": "wrangler d1 execute traffic_analytics_db --file=./schema.d1.sql --remote"
   },
   "dependencies": {
+    "@cloudflare/workers-types": "^5.20261019.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "hono": "^4.12.25",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.1"
   },
