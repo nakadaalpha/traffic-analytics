@@ -27,7 +27,10 @@ export default function ProjectsPage() {
   const fetchProjects = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/track/projects', { cache: 'no-store' });
+      const res = await fetch('/api/track/projects', {
+        credentials: 'include',
+        cache: 'no-store',
+      });
       if (res.ok) {
         const json = await res.json();
         const list: ProjectData[] = json.data || [];

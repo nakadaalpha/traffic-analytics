@@ -396,24 +396,21 @@ async function extractCurrentUser(c: any): Promise<{ id: string; username: strin
 // Project & Metrics Endpoints (Protected & User-Isolated)
 // -------------------------------------------------------------
 
-// GET /api/track/projects (Hanya menampilkan project milik user yang sedang login)
+// GET /api/track/projects (Ketat: HANYA menampilkan project milik user yang sedang login)
 app.get('/api/track/projects', async (c) => {
   try {
     const currentUser = await extractCurrentUser(c);
 
-    let query = `SELECT id, name, public_write_key, allowed_origins, is_active, owner_id, created_at FROM projects `;
-    const params: any[] = [];
-
-    if (currentUser) {
-      // Tampilkan project milik user yang login, ATAU project demo bawaan (owner_id IS NULL)
-      query += `WHERE owner_id = ? OR owner_id IS NULL ORDER BY created_at DESC;`;
-      params.push(currentUser.id);
-    } else {
-      // Jika belum login, hanya boleh melihat demo
-      query += `WHERE owner_id IS NULL ORDER BY created_at DESC;`;
+    if (!currentUser) {
+      return c.json({ success: true, count: 0, data: [] });
     }
 
-    const { results } = await c.env.DB.prepare(query).bind(...params).all();
+    const query = `SELECT id, name, public_write_key, allowed_origins, is_active, owner_id, created_at 
+                   FROM projects 
+                   WHERE owner_id = ? 
+                   ORDER BY created_at DESC;`;
+
+    const { results } = await c.env.DB.prepare(query).bind(currentUser.id).all();
 
     const formatted = results.map((row: any) => {
       let origins = [];
