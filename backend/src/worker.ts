@@ -48,6 +48,83 @@ function isRateLimited(clientIp: string): boolean {
   return record.count > RATE_LIMIT_MAX;
 }
 
+// GET /api/track/projects (Ambil daftar seluruh project)
+app.get('/api/track/projects', async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, name, public_write_key, allowed_origins, is_active, created_at FROM projects ORDER BY created_at DESC;`
+    ).all();
+
+    const formatted = results.map((row: any) => {
+      let origins = [];
+      try {
+        origins = JSON.parse(row.allowed_origins || '[]');
+      } catch {
+        origins = [row.allowed_origins];
+      }
+      return {
+        id: row.id,
+        name: row.name,
+        writeKey: row.public_write_key,
+        allowedOrigins: origins,
+        isActive: Boolean(row.is_active),
+        createdAt: row.created_at,
+      };
+    });
+
+    return c.json({ success: true, count: formatted.length, data: formatted });
+  } catch (error: any) {
+    console.error('[Get Projects Error]', error.message);
+    return c.json({ success: false, error: 'Failed to fetch projects' }, 500);
+  }
+});
+
+// POST /api/track/projects (Tambah project baru langsung dari Dashboard)
+app.post('/api/track/projects', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const name = (body.name || '').trim();
+    const domain = (body.domain || '').trim();
+
+    if (!name || !domain) {
+      return c.json({ success: false, error: 'Nama project dan domain wajib diisi' }, 400);
+    }
+
+    // Generate project id & write key
+    const idSlug = name.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 30);
+    const projectId = `prj_${idSlug}_${Math.random().toString(36).substring(2, 6)}`;
+    const writeKey = `pk_live_${Math.random().toString(36).substring(2, 10)}${Date.now().toString(36)}`;
+    
+    // Normalisasi allowed origins
+    const allowedOrigins = [domain];
+    if (!domain.includes('localhost')) {
+      allowedOrigins.push('http://localhost:3000');
+    }
+
+    await c.env.DB.prepare(
+      `INSERT INTO projects (id, name, public_write_key, allowed_origins, is_active)
+       VALUES (?, ?, ?, ?, 1);`
+    )
+      .bind(projectId, name, writeKey, JSON.stringify(allowedOrigins))
+      .run();
+
+    return c.json({
+      success: true,
+      message: 'Project berhasil ditambahkan',
+      data: {
+        id: projectId,
+        name,
+        writeKey,
+        allowedOrigins,
+        isActive: true,
+      },
+    }, 201);
+  } catch (error: any) {
+    console.error('[Create Project Error]', error.message);
+    return c.json({ success: false, error: error.message || 'Failed to create project' }, 500);
+  }
+});
+
 // Health check endpoint
 app.get('/health', (c) => {
   return c.json({ status: 'ok', engine: 'cloudflare-workers-d1', timestamp: new Date().toISOString() });
