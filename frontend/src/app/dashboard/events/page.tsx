@@ -9,7 +9,10 @@ import {
   FileText, 
   ShieldCheck, 
   Terminal, 
-  Globe 
+  Globe,
+  Monitor,
+  Smartphone,
+  Tablet,
 } from 'lucide-react';
 
 interface ClickEventRow {
@@ -27,6 +30,43 @@ interface ClickEventRow {
 interface ProjectOption {
   id: string;
   name: string;
+}
+
+function parseUserAgentDetails(ua: string | null | undefined) {
+  if (!ua) {
+    return { deviceType: 'Desktop' as const, os: 'Desktop', browser: 'Browser' };
+  }
+  const lower = ua.toLowerCase();
+
+  // 1. Device Type & OS
+  let deviceType: 'Mobile' | 'Desktop' | 'Tablet' = 'Desktop';
+  let os = 'Desktop';
+
+  if (lower.includes('ipad') || lower.includes('tablet')) {
+    deviceType = 'Tablet';
+    os = lower.includes('ipad') ? 'iPadOS' : 'Tablet';
+  } else if (lower.includes('iphone') || lower.includes('mobile') || lower.includes('android')) {
+    deviceType = 'Mobile';
+    if (lower.includes('iphone')) os = 'iOS';
+    else if (lower.includes('android')) os = 'Android';
+    else os = 'Mobile';
+  } else {
+    deviceType = 'Desktop';
+    if (lower.includes('macintosh') || lower.includes('mac os')) os = 'macOS';
+    else if (lower.includes('windows')) os = 'Windows';
+    else if (lower.includes('linux')) os = 'Linux';
+    else os = 'Desktop';
+  }
+
+  // 2. Browser Detection
+  let browser = 'Browser';
+  if (lower.includes('edg/') || lower.includes('edge/')) browser = 'Edge';
+  else if (lower.includes('chrome') && !lower.includes('chromium')) browser = 'Chrome';
+  else if (lower.includes('safari') && !lower.includes('chrome')) browser = 'Safari';
+  else if (lower.includes('firefox')) browser = 'Firefox';
+  else if (lower.includes('opera') || lower.includes('opr/')) browser = 'Opera';
+
+  return { deviceType, os, browser };
 }
 
 export default function EventsPage() {
@@ -131,7 +171,7 @@ export default function EventsPage() {
             >
               {projects.map((proj) => (
                 <option key={proj.id} value={proj.id}>
-                  {proj.name} ({proj.id})
+                  {proj.name}
                 </option>
               ))}
             </select>
@@ -145,14 +185,6 @@ export default function EventsPage() {
             <RotateCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             <span>Segarkan</span>
           </button>
-
-          <Link
-            href="/dashboard"
-            className="px-3 py-1.5 text-xs font-medium bg-white hover:bg-zinc-100 text-zinc-700 rounded-lg border border-zinc-300 transition-colors flex items-center gap-1.5"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Kembali</span>
-          </Link>
         </div>
       </div>
 
@@ -176,35 +208,57 @@ export default function EventsPage() {
                   <th className="px-5 py-3 font-semibold">ID</th>
                   <th className="px-5 py-3 font-semibold">Element (CTA)</th>
                   <th className="px-5 py-3 font-semibold">Path Halaman</th>
+                  <th className="px-5 py-3 font-semibold">Perangkat</th>
+                  <th className="px-5 py-3 font-semibold">Browser</th>
                   <th className="px-5 py-3 font-semibold">IP Address (Masked)</th>
                   <th className="px-5 py-3 font-semibold">Session ID</th>
                   <th className="px-5 py-3 font-semibold text-right">Waktu (WIB)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200 bg-white">
-                {events.map((evt) => (
-                  <tr key={evt.id} className="hover:bg-zinc-50/80 transition-colors">
-                    <td className="px-5 py-3.5 font-mono text-[11px] text-zinc-400">#{evt.id}</td>
-                    <td className="px-5 py-3.5">
-                      <span className="font-mono font-semibold text-zinc-900 bg-zinc-100 px-2 py-0.5 rounded border border-zinc-200">
-                        {evt.element_id}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3.5 font-mono text-zinc-600">{evt.page_path}</td>
-                    <td className="px-5 py-3.5">
-                      <span className="font-mono text-zinc-800 flex items-center gap-1.5">
-                        <Globe className="w-3.5 h-3.5 text-zinc-400" />
-                        {evt.ip_address}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3.5 font-mono text-[11px] text-zinc-500 max-w-[140px] truncate" title={evt.session_id}>
-                      {evt.session_id}
-                    </td>
-                    <td className="px-5 py-3.5 text-right font-mono text-zinc-500">
-                      {new Date(evt.created_at).toLocaleString('id-ID')}
-                    </td>
-                  </tr>
-                ))}
+                {events.map((evt) => {
+                  const dev = parseUserAgentDetails(evt.user_agent);
+                  return (
+                    <tr key={evt.id} className="hover:bg-zinc-50/80 transition-colors">
+                      <td className="px-5 py-3.5 font-mono text-[11px] text-zinc-400">#{evt.id}</td>
+                      <td className="px-5 py-3.5">
+                        <span className="font-mono font-semibold text-zinc-900 bg-zinc-100 px-2 py-0.5 rounded border border-zinc-200">
+                          {evt.element_id}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 font-mono text-zinc-600">{evt.page_path}</td>
+                      <td className="px-5 py-3.5">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-zinc-100 border border-zinc-200 text-zinc-800 text-[11px] font-medium font-mono">
+                          {dev.deviceType === 'Mobile' ? (
+                            <Smartphone className="w-3.5 h-3.5 text-zinc-600" />
+                          ) : dev.deviceType === 'Tablet' ? (
+                            <Tablet className="w-3.5 h-3.5 text-zinc-600" />
+                          ) : (
+                            <Monitor className="w-3.5 h-3.5 text-zinc-600" />
+                          )}
+                          <span>{dev.os}</span>
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-zinc-50 border border-zinc-200 text-zinc-700 text-[11px] font-mono">
+                          {dev.browser}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <span className="font-mono text-zinc-800 flex items-center gap-1.5">
+                          <Globe className="w-3.5 h-3.5 text-zinc-400" />
+                          {evt.ip_address}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5 font-mono text-[11px] text-zinc-500 max-w-[140px] truncate" title={evt.session_id}>
+                        {evt.session_id}
+                      </td>
+                      <td className="px-5 py-3.5 text-right font-mono text-zinc-500">
+                        {new Date(evt.created_at).toLocaleString('id-ID')}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
