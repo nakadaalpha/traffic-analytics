@@ -1,19 +1,19 @@
-'use client';
+"use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { 
-  Layers, 
-  Plus, 
-  Copy, 
-  Check, 
-  FolderCheck, 
-  Terminal, 
-  Code2, 
-  Globe, 
-  Key, 
+import React, { useState, useEffect, useCallback } from "react";
+import {
+  Layers,
+  Plus,
+  Copy,
+  Check,
+  FolderCheck,
+  Terminal,
+  Code2,
+  Globe,
+  Key,
   HelpCircle,
-  AlertCircle
-} from 'lucide-react';
+  AlertCircle,
+} from "lucide-react";
 
 interface ProjectData {
   id: string;
@@ -34,9 +34,9 @@ interface FrameworkSnippet {
 
 const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   {
-    id: 'vite',
-    name: 'React (Vite)',
-    fileTarget: 'index.html (di folder root)',
+    id: "vite",
+    name: "React (Vite)",
+    fileTarget: "index.html (di folder root)",
     getCode: (pid, key) => `<!-- index.html -->
 <!doctype html>
 <html lang="en">
@@ -56,12 +56,12 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
     <div id="root"></div>
   </body>
 </html>`,
-    note: 'Otomatis mendukung localhost:5173 saat pengujian lokal.',
+    note: "Otomatis mendukung localhost:5173 saat pengujian lokal.",
   },
   {
-    id: 'next-app',
-    name: 'Next.js (App Router)',
-    fileTarget: 'app/layout.tsx atau src/app/layout.tsx',
+    id: "next-app",
+    name: "Next.js (App Router)",
+    fileTarget: "app/layout.tsx atau src/app/layout.tsx",
     getCode: (pid, key) => `// app/layout.tsx
 import Script from 'next/script';
 
@@ -84,22 +84,25 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     note: 'strategy="afterInteractive" memastikan kecepatan FCP website tidak terganggu.',
   },
   {
-    id: 'html',
-    name: 'HTML / PHP / WordPress',
-    fileTarget: 'index.html / header.php / theme.liquid',
-    getCode: (pid, key) => `<!-- Sisipkan sebelum </head> atau sebelum </body> -->
+    id: "html",
+    name: "HTML / PHP / WordPress",
+    fileTarget: "index.html / header.php / theme.liquid",
+    getCode: (
+      pid,
+      key,
+    ) => `<!-- Sisipkan sebelum </head> atau sebelum </body> -->
 <script
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
-    note: 'Bisa ditempelkan di CMS apa pun (WordPress, Webflow, Blogger, Shopify, Laravel).',
+    note: "Bisa ditempelkan di CMS apa pun (WordPress, Webflow, Blogger, Shopify, Laravel).",
   },
   {
-    id: 'vue',
-    name: 'Vue / Nuxt 3',
-    fileTarget: 'index.html (Vue) atau nuxt.config.ts (Nuxt)',
+    id: "vue",
+    name: "Vue / Nuxt 3",
+    fileTarget: "index.html (Vue) atau nuxt.config.ts (Nuxt)",
     getCode: (pid, key) => `// nuxt.config.ts
 export default defineNuxtConfig({
   app: {
@@ -117,9 +120,9 @@ export default defineNuxtConfig({
 });`,
   },
   {
-    id: 'astro',
-    name: 'Astro',
-    fileTarget: 'src/layouts/Layout.astro',
+    id: "astro",
+    name: "Astro",
+    fileTarget: "src/layouts/Layout.astro",
     getCode: (pid, key) => `---
 // src/layouts/Layout.astro
 ---
@@ -143,24 +146,31 @@ export default defineNuxtConfig({
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectData[]>([]);
-  const [selectedProject, setSelectedProject] = useState<ProjectData | null>(null);
+  const [selectedProject, setSelectedProject] = useState<ProjectData | null>(
+    null,
+  );
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [selectedFramework, setSelectedFramework] = useState(FRAMEWORK_SNIPPETS[0].id);
+  const [selectedFramework, setSelectedFramework] = useState(
+    FRAMEWORK_SNIPPETS[0].id,
+  );
 
   // Form State untuk Tambah Project Baru
-  const [projectName, setProjectName] = useState('');
-  const [projectDomain, setProjectDomain] = useState('');
+  const [projectName, setProjectName] = useState("");
+  const [projectDomain, setProjectDomain] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   // Fetch daftar project milik user langsung dari D1
   const fetchProjects = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/track/projects', {
-        credentials: 'include',
-        cache: 'no-store',
+      const res = await fetch("/api/track/projects", {
+        credentials: "include",
+        cache: "no-store",
       });
       if (res.ok) {
         const json = await res.json();
@@ -171,7 +181,7 @@ export default function ProjectsPage() {
         }
       }
     } catch (err) {
-      console.warn('[ProjectsPage] Failed to fetch projects:', err);
+      console.warn("[ProjectsPage] Failed to fetch projects:", err);
     } finally {
       setLoading(false);
     }
@@ -185,7 +195,10 @@ export default function ProjectsPage() {
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!projectName.trim() || !projectDomain.trim()) {
-      setMessage({ type: 'error', text: 'Nama project dan domain wajib diisi!' });
+      setMessage({
+        type: "error",
+        text: "Nama project dan domain wajib diisi!",
+      });
       return;
     }
 
@@ -193,10 +206,10 @@ export default function ProjectsPage() {
       setIsSubmitting(true);
       setMessage(null);
 
-      const res = await fetch('/api/track/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+      const res = await fetch("/api/track/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           name: projectName.trim(),
           domain: projectDomain.trim(),
@@ -206,25 +219,36 @@ export default function ProjectsPage() {
       const json = await res.json();
 
       if (res.ok && json.success) {
-        setMessage({ type: 'success', text: `Project "${projectName}" berhasil didaftarkan!` });
-        setProjectName('');
-        setProjectDomain('');
+        setMessage({
+          type: "success",
+          text: `Project "${projectName}" berhasil didaftarkan!`,
+        });
+        setProjectName("");
+        setProjectDomain("");
         const newProj = json.data;
         setProjects((prev) => [newProj, ...prev]);
         setSelectedProject(newProj);
       } else {
-        setMessage({ type: 'error', text: json.error || 'Gagal membuat project' });
+        setMessage({
+          type: "error",
+          text: json.error || "Gagal membuat project",
+        });
       }
     } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Terjadi kesalahan jaringan' });
+      setMessage({
+        type: "error",
+        text: err.message || "Terjadi kesalahan jaringan",
+      });
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const activeSnippet = FRAMEWORK_SNIPPETS.find((f) => f.id === selectedFramework) || FRAMEWORK_SNIPPETS[0];
-  const currentPid = selectedProject?.id || 'PROJECT_ID_ANDA';
-  const currentKey = selectedProject?.writeKey || 'WRITE_KEY_ANDA';
+  const activeSnippet =
+    FRAMEWORK_SNIPPETS.find((f) => f.id === selectedFramework) ||
+    FRAMEWORK_SNIPPETS[0];
+  const currentPid = selectedProject?.id || "PROJECT_ID_ANDA";
+  const currentKey = selectedProject?.writeKey || "WRITE_KEY_ANDA";
   const displayCode = activeSnippet.getCode(currentPid, currentKey);
 
   const copyToClipboard = () => {
@@ -239,10 +263,13 @@ export default function ProjectsPage() {
       <div>
         <div className="flex items-center gap-2 text-zinc-900">
           <Layers className="w-5 h-5 text-zinc-900" />
-          <h1 className="text-xl font-bold">Manajemen Project &amp; Pemasangan Script</h1>
+          <h1 className="text-xl font-bold">
+            Manajemen Project &amp; Pemasangan Script
+          </h1>
         </div>
         <p className="text-xs text-zinc-500 mt-1">
-          Daftarkan website baru Anda dan dapatkan panduan kode siap pakai untuk framework apa pun.
+          Daftarkan website baru Anda dan dapatkan panduan kode siap pakai untuk
+          framework apa pun.
         </p>
       </div>
 
@@ -256,12 +283,12 @@ export default function ProjectsPage() {
         {message && (
           <div
             className={`p-3 rounded-lg text-xs font-medium border flex items-center gap-2 ${
-              message.type === 'success'
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                : 'bg-rose-50 border-rose-200 text-rose-800'
+              message.type === "success"
+                ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                : "bg-rose-50 border-rose-200 text-rose-800"
             }`}
           >
-            {message.type === 'success' ? (
+            {message.type === "success" ? (
               <Check className="w-4 h-4 text-emerald-600" />
             ) : (
               <AlertCircle className="w-4 h-4 text-rose-600" />
@@ -270,9 +297,14 @@ export default function ProjectsPage() {
           </div>
         )}
 
-        <form onSubmit={handleCreateProject} className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+        <form
+          onSubmit={handleCreateProject}
+          className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
+        >
           <div className="sm:col-span-5 space-y-1">
-            <label className="text-xs font-semibold text-zinc-700">Nama Website / Project</label>
+            <label className="text-xs font-semibold text-zinc-700">
+              Nama Website / Project
+            </label>
             <input
               type="text"
               placeholder="Contoh: Portfolio Saya / Toko Online"
@@ -284,7 +316,9 @@ export default function ProjectsPage() {
           </div>
 
           <div className="sm:col-span-5 space-y-1">
-            <label className="text-xs font-semibold text-zinc-700">Domain Website</label>
+            <label className="text-xs font-semibold text-zinc-700">
+              Domain Website
+            </label>
             <input
               type="text"
               placeholder="Contoh: https://myportofolio.vercel.app"
@@ -301,10 +335,93 @@ export default function ProjectsPage() {
               disabled={isSubmitting}
               className="w-full bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium text-xs py-2 px-4 rounded-lg shadow-sm transition-all active:scale-[0.98] cursor-pointer h-[38px] flex items-center justify-center gap-1.5"
             >
-              {isSubmitting ? 'Menyimpan...' : 'Buat Project'}
+              {isSubmitting ? "Menyimpan..." : "Buat Project"}
             </button>
           </div>
         </form>
+      </div>
+
+      {/* Container Card: Daftar Project Aktif Milik Anda */}
+      <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+              <FolderCheck className="w-4 h-4 text-zinc-700" />
+              <span>Daftar Project Aktif Milik Anda ({projects.length})</span>
+            </h2>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Pilih proyek untuk melihat panduan instalasi script dan write key terkait
+            </p>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="p-8 text-center text-xs text-zinc-400">
+            Memuat data project...
+          </div>
+        ) : projects.length === 0 ? (
+          <div className="p-8 text-center text-xs text-zinc-500 border border-dashed border-zinc-200 rounded-xl">
+            Belum ada project terdaftar. Gunakan formulir di atas untuk mendaftarkan website baru.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+            {projects.map((proj) => (
+              <div
+                key={proj.id}
+                onClick={() => setSelectedProject(proj)}
+                className={`border rounded-xl p-5 transition-all cursor-pointer ${
+                  selectedProject?.id === proj.id
+                    ? "bg-white border-zinc-900 ring-1 ring-zinc-900 shadow-sm"
+                    : "bg-zinc-50/60 border-zinc-200 hover:border-zinc-300 hover:bg-white"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-zinc-900 text-sm">
+                      {proj.name}
+                    </h4>
+                    <span className="font-mono text-xs text-zinc-500">
+                      {proj.id}
+                    </span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-semibold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    Aktif
+                  </span>
+                </div>
+
+                <div className="space-y-2 text-xs text-zinc-600 mt-3.5">
+                  <div>
+                    <span className="text-zinc-400 block mb-0.5 text-[11px] font-medium flex items-center gap-1">
+                      <Key className="w-3 h-3 text-zinc-400" />
+                      Public Write Key:
+                    </span>
+                    <code className="px-2 py-1 rounded bg-zinc-100 border border-zinc-200 text-zinc-900 font-mono text-[11px] block">
+                      {proj.writeKey}
+                    </code>
+                  </div>
+
+                  <div>
+                    <span className="text-zinc-400 block mb-0.5 text-[11px] font-medium flex items-center gap-1">
+                      <Globe className="w-3 h-3 text-zinc-400" />
+                      Domain Terdaftar:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {proj.allowedOrigins.map((orig) => (
+                        <span
+                          key={orig}
+                          className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-700 font-mono text-[11px]"
+                        >
+                          {orig}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Script Tag Snippet Generator per Framework */}
@@ -316,14 +433,17 @@ export default function ProjectsPage() {
               <span>Panduan Pasang Script per Framework</span>
             </h2>
             <p className="text-xs text-zinc-500">
-              Pilih framework website Anda di bawah ini, lalu salin kodenya ke file yang ditentukan.
+              Pilih framework website Anda di bawah ini, lalu salin kodenya ke
+              file yang ditentukan.
             </p>
           </div>
 
           <div className="flex items-center gap-2">
-            <label className="text-xs text-zinc-500 font-medium">Pilih Project:</label>
+            <label className="text-xs text-zinc-500 font-medium">
+              Pilih Project:
+            </label>
             <select
-              value={selectedProject?.id || ''}
+              value={selectedProject?.id || ""}
               onChange={(e) => {
                 const found = projects.find((p) => p.id === e.target.value);
                 if (found) setSelectedProject(found);
@@ -348,8 +468,8 @@ export default function ProjectsPage() {
               onClick={() => setSelectedFramework(fw.id)}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
                 selectedFramework === fw.id
-                  ? 'bg-zinc-900 text-white shadow-sm'
-                  : 'bg-zinc-100 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/70'
+                  ? "bg-zinc-900 text-white shadow-sm"
+                  : "bg-zinc-100 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/70"
               }`}
             >
               {fw.name}
@@ -404,91 +524,36 @@ export default function ProjectsPage() {
             <span>Langkah 2: Tandai Tombol yang Ingin Dihitung Kliknya</span>
           </div>
           <p className="text-zinc-500">
-            Tambahkan atribut <code className="text-zinc-900 font-mono font-semibold bg-zinc-200 px-1 py-0.5 rounded">data-track-cta="nama_tombol"</code> pada tombol, link WhatsApp, atau form di website Anda:
+            Tambahkan atribut{" "}
+            <code className="text-zinc-900 font-mono font-semibold bg-zinc-200 px-1 py-0.5 rounded">
+              data-track-cta="nama_tombol"
+            </code>{" "}
+            pada tombol, link WhatsApp, atau form di website Anda:
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
             <div className="p-2.5 rounded-lg bg-white border border-zinc-200">
-              <span className="text-[11px] text-zinc-400 block mb-1">Contoh Link WhatsApp:</span>
+              <span className="text-[11px] text-zinc-400 block mb-1">
+                Contoh Link WhatsApp:
+              </span>
               <code className="text-zinc-800 font-mono text-[11px] block overflow-x-auto">
-                &lt;a href=&quot;https://wa.me/...&quot; data-track-cta=&quot;btn-whatsapp&quot;&gt;Chat WhatsApp&lt;/a&gt;
+                &lt;a href=&quot;https://wa.me/...&quot;
+                data-track-cta=&quot;btn-whatsapp&quot;&gt;Chat
+                WhatsApp&lt;/a&gt;
               </code>
             </div>
 
             <div className="p-2.5 rounded-lg bg-white border border-zinc-200">
-              <span className="text-[11px] text-zinc-400 block mb-1">Contoh Tombol Checkout:</span>
+              <span className="text-[11px] text-zinc-400 block mb-1">
+                Contoh Tombol Checkout:
+              </span>
               <code className="text-zinc-800 font-mono text-[11px] block overflow-x-auto">
-                &lt;button data-track-cta=&quot;btn-checkout&quot;&gt;Beli Sekarang&lt;/button&gt;
+                &lt;button data-track-cta=&quot;btn-checkout&quot;&gt;Beli
+                Sekarang&lt;/button&gt;
               </code>
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Grid Project Milik Anda */}
-      <div className="space-y-3">
-        <h3 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
-          <FolderCheck className="w-4 h-4 text-zinc-700" />
-          <span>Daftar Project Aktif Milik Anda ({projects.length})</span>
-        </h3>
-
-        {loading ? (
-          <div className="p-6 text-center text-xs text-zinc-400">Memuat data project...</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {projects.map((proj) => (
-              <div
-                key={proj.id}
-                onClick={() => setSelectedProject(proj)}
-                className={`bg-white border rounded-xl p-5 shadow-sm space-y-3.5 transition-all cursor-pointer ${
-                  selectedProject?.id === proj.id
-                    ? 'border-zinc-900 ring-1 ring-zinc-900'
-                    : 'border-zinc-200 hover:border-zinc-300'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="font-bold text-zinc-900 text-sm">{proj.name}</h4>
-                    <span className="font-mono text-xs text-zinc-500">{proj.id}</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    Aktif
-                  </span>
-                </div>
-
-                <div className="space-y-2 text-xs text-zinc-600">
-                  <div>
-                    <span className="text-zinc-400 block mb-0.5 text-[11px] font-medium flex items-center gap-1">
-                      <Key className="w-3 h-3 text-zinc-400" />
-                      Public Write Key:
-                    </span>
-                    <code className="px-2 py-1 rounded bg-zinc-100 border border-zinc-200 text-zinc-900 font-mono text-[11px] block">
-                      {proj.writeKey}
-                    </code>
-                  </div>
-
-                  <div>
-                    <span className="text-zinc-400 block mb-0.5 text-[11px] font-medium flex items-center gap-1">
-                      <Globe className="w-3 h-3 text-zinc-400" />
-                      Domain Terdaftar:
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {proj.allowedOrigins.map((orig) => (
-                        <span
-                          key={orig}
-                          className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-700 font-mono text-[11px]"
-                        >
-                          {orig}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
