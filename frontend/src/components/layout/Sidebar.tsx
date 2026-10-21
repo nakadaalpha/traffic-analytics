@@ -27,7 +27,7 @@ export function Sidebar() {
       icon: BarChart3,
     },
     {
-      name: 'Event Logs Mentah',
+      name: 'Event Logs',
       href: '/dashboard/events',
       icon: FileText,
     },
@@ -41,11 +41,11 @@ export function Sidebar() {
       href: '/dashboard/docs',
       icon: BookOpen,
     },
-    {
-      name: 'Demo Profil Form',
-      href: '/profile',
-      icon: User,
-    },
+    // {
+    //   name: 'Demo Profil Form',
+    //   href: '/profile',
+    //   icon: User,
+    // },
   ];
 
   return (
@@ -85,7 +85,7 @@ export function Sidebar() {
               <Zap className="w-4 h-4 fill-white" />
             </div>
             <span>
-              ClickTracker <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-600 border border-zinc-200">PRO</span>
+              Firenalytics
             </span>
           </Link>
 
@@ -129,7 +129,7 @@ export function Sidebar() {
             );
           })}
 
-          {/* Quick CTA Tester */}
+          {/* Quick CTA Tester
           <div className="pt-6 px-3 pb-2 text-[11px] font-semibold tracking-wider uppercase text-zinc-400">
             CTA Tester Cepat
           </div>
@@ -141,7 +141,7 @@ export function Sidebar() {
           >
             <span className="w-2 h-2 rounded-full bg-zinc-400" />
             <span>Test Click (Sidebar CTA)</span>
-          </button>
+          </button> */}
         </div>
 
         {/* System Info Footer */}

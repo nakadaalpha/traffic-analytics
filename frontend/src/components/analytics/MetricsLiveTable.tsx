@@ -244,7 +244,7 @@ export function MetricsLiveTable({
               >
                 {projects.map((proj) => (
                   <option key={proj.id} value={proj.id}>
-                    {proj.name} ({proj.id})
+                    {proj.name}
                   </option>
                 ))}
               </select>
@@ -261,17 +261,6 @@ export function MetricsLiveTable({
                 className="w-40 sm:w-48 pl-8 pr-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-400 focus:bg-white transition-all font-mono"
               />
             </div>
-
-            {/* Refresh Button */}
-            <button
-              type="button"
-              onClick={fetchMetrics}
-              disabled={loading}
-              className="px-3 py-1.5 text-xs font-medium bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white rounded-lg shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-[0.98]"
-            >
-              <RotateCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{loading ? 'Memuat...' : 'Segarkan'}</span>
-            </button>
           </div>
         </div>
 

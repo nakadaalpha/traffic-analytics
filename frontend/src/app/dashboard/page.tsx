@@ -140,9 +140,6 @@ export default function DashboardOverviewPage() {
             <div className="flex items-center gap-2 bg-white border border-zinc-200 rounded-lg px-3 py-1.5 shadow-sm">
               <FolderOpen className="w-4 h-4 text-zinc-500" />
               <div className="flex flex-col">
-                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">
-                  Proyek Terpilih
-                </span>
                 <select
                   value={selectedProject}
                   onChange={(e) => setSelectedProject(e.target.value)}
@@ -150,21 +147,14 @@ export default function DashboardOverviewPage() {
                 >
                   {projects.map((proj) => (
                     <option key={proj.id} value={proj.id}>
-                      {proj.name} ({proj.id})
+                      {proj.name} 
+                      {/* ({proj.id}) */}
                     </option>
                   ))}
                 </select>
               </div>
             </div>
           )}
-
-          <Link
-            href="/"
-            className="px-3 py-2 text-xs bg-white hover:bg-zinc-100 text-zinc-700 rounded-lg border border-zinc-200 transition-colors flex items-center gap-1.5 shadow-sm"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Lihat Halaman Demo</span>
-          </Link>
 
           <button
             type="button"
