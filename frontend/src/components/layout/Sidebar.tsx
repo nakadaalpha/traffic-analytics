@@ -8,7 +8,6 @@ import {
   FileText, 
   Layers, 
   BookOpen, 
-  User, 
   Zap, 
   ChevronRight, 
   ArrowUpRight,
@@ -41,11 +40,6 @@ export function Sidebar() {
       href: '/dashboard/docs',
       icon: BookOpen,
     },
-    // {
-    //   name: 'Demo Profil Form',
-    //   href: '/profile',
-    //   icon: User,
-    // },
   ];
 
   return (

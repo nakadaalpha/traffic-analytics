@@ -25,8 +25,8 @@ export function Navbar() {
             <Link href="/" className="hover:text-zinc-900 transition-colors">
               Halaman Utama
             </Link>
-            <Link href="/profile" className="hover:text-zinc-900 transition-colors">
-              Demo Profil
+            <Link href="/dashboard" className="hover:text-zinc-900 transition-colors">
+              Dashboard
             </Link>
           </div>
         </div>
