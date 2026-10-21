@@ -19,7 +19,7 @@ export function Navbar() {
             <span className="p-1 rounded-md bg-zinc-900 text-white">
               <Zap className="w-4 h-4" />
             </span>
-            <span>ClickTracker Pro</span>
+            <span>Firenalytics</span>
           </Link>
           <div className="hidden md:flex space-x-6 text-xs font-medium text-zinc-600">
             <Link href="/" className="hover:text-zinc-900 transition-colors">

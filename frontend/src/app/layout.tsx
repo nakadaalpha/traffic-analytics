@@ -4,7 +4,7 @@ import ClickTracker from '@/components/analytics/ClickTracker';
 import { AuthProvider } from '@/context/AuthContext';
 
 export const metadata: Metadata = {
-  title: 'ClickTracker PRO | Enterprise CTA & Traffic Analytics',
+  title: 'Firenalytics | Enterprise CTA & Traffic Analytics',
   description: 'Clean, light-mode, high-performance click and conversion tracking powered by Cloudflare Workers and Next.js 16',
 };
 

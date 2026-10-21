@@ -37,6 +37,21 @@ export interface MetricsLiveTableProps {
   onRefresh?: () => void;
 }
 
+// Helper untuk mengonversi timestamp SQLite (UTC) ke jam lokal secara presisi
+function formatUtcToLocalTime(utcDateStr: string | null | undefined): string {
+  if (!utcDateStr) return '-';
+  try {
+    const isoString = utcDateStr.includes('T')
+      ? (utcDateStr.endsWith('Z') ? utcDateStr : `${utcDateStr}Z`)
+      : `${utcDateStr.replace(' ', 'T')}Z`;
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return utcDateStr;
+    return d.toLocaleTimeString('id-ID');
+  } catch {
+    return utcDateStr;
+  }
+}
+
 export function MetricsLiveTable({
   selectedProject: propSelectedProject,
   onSelectProject: propOnSelectProject,
@@ -320,7 +335,7 @@ export function MetricsLiveTable({
                         </span>
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono text-zinc-500">
-                        {new Date(row.last_clicked_at).toLocaleTimeString('id-ID')}
+                        {formatUtcToLocalTime(row.last_clicked_at)}
                       </td>
                     </tr>
                   );

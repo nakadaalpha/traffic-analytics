@@ -200,6 +200,34 @@ function getCtaBadgeStyle(elementId: string) {
   };
 }
 
+// Helper untuk mengonversi timestamp SQLite (UTC) ke waktu lokal pengguna secara akurat
+function formatUtcToLocalString(utcDateStr: string | null | undefined): string {
+  if (!utcDateStr) return '-';
+  try {
+    const isoString = utcDateStr.includes('T')
+      ? (utcDateStr.endsWith('Z') ? utcDateStr : `${utcDateStr}Z`)
+      : `${utcDateStr.replace(' ', 'T')}Z`;
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return utcDateStr;
+    return d.toLocaleString('id-ID');
+  } catch {
+    return utcDateStr;
+  }
+}
+
+function parseUtcTimestampMs(utcDateStr: string | null | undefined): number {
+  if (!utcDateStr) return 0;
+  try {
+    const isoString = utcDateStr.includes('T')
+      ? (utcDateStr.endsWith('Z') ? utcDateStr : `${utcDateStr}Z`)
+      : `${utcDateStr.replace(' ', 'T')}Z`;
+    const d = new Date(isoString);
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  } catch {
+    return 0;
+  }
+}
+
 export default function EventsPage() {
   const [events, setEvents] = useState<ClickEventRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -326,9 +354,9 @@ export default function EventsPage() {
           const cmp = a.element_id.localeCompare(b.element_id);
           return sortDirection === 'asc' ? cmp : -cmp;
         } else {
-          // Sort waktu
-          const timeA = new Date(a.created_at).getTime() || Number(a.id) || 0;
-          const timeB = new Date(b.created_at).getTime() || Number(b.id) || 0;
+          // Sort waktu (menggunakan helper UTC yang akurat)
+          const timeA = parseUtcTimestampMs(a.created_at) || Number(a.id) || 0;
+          const timeB = parseUtcTimestampMs(b.created_at) || Number(b.id) || 0;
           return sortDirection === 'asc' ? timeA - timeB : timeB - timeA;
         }
       });
@@ -611,7 +639,7 @@ export default function EventsPage() {
                         {evt.session_id}
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono text-zinc-500">
-                        {new Date(evt.created_at).toLocaleString('id-ID')}
+                        {formatUtcToLocalString(evt.created_at)}
                       </td>
                     </tr>
                   );

@@ -129,7 +129,7 @@ export default function DocsPage() {
           <span>Panduan Integrasi SDK</span>
         </div>
         <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 tracking-tight">
-          Cara Memasang ClickTracker ke Website Anda
+          Cara Memasang Script Tracker ke Website Anda
         </h1>
         <p className="text-xs text-zinc-500 mt-1.5 leading-relaxed">
           Pemasangan membutuhkan waktu kurang dari 2 menit. Sisipkan script di website Anda dan tambahkan atribut penanda pada tombol atau link yang ingin dilacak.

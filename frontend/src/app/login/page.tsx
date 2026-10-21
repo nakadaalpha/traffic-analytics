@@ -59,7 +59,7 @@ export default function LoginPage() {
               <Zap className="w-5 h-5" />
             </span>
             <span className="text-2xl font-bold text-zinc-900 tracking-tight">
-              ClickTracker <span className="text-zinc-600 font-semibold text-xs px-2 py-0.5 rounded-md bg-zinc-100 border border-zinc-200">PRO</span>
+              Firenalytics
             </span>
           </Link>
           <h1 className="text-xl font-bold text-zinc-900 tracking-tight">Masuk ke Platform</h1>
