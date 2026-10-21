@@ -13,7 +13,7 @@ import {
   FolderOpen
 } from 'lucide-react';
 
-interface MetricRow {
+export interface MetricRow {
   project_id: string;
   element_id: string;
   page_path: string;
@@ -27,16 +27,44 @@ interface ProjectOption {
   ownerId?: string | null;
 }
 
-export function MetricsLiveTable() {
-  const [metrics, setMetrics] = useState<MetricRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
-  const [projects, setProjects] = useState<ProjectOption[]>([]);
-  const [selectedProject, setSelectedProject] = useState('');
+export interface MetricsLiveTableProps {
+  selectedProject?: string;
+  onSelectProject?: (id: string) => void;
+  projects?: ProjectOption[];
+  metrics?: MetricRow[];
+  loading?: boolean;
+  lastRefreshed?: Date | null;
+  onRefresh?: () => void;
+}
+
+export function MetricsLiveTable({
+  selectedProject: propSelectedProject,
+  onSelectProject: propOnSelectProject,
+  projects: propProjects,
+  metrics: propMetrics,
+  loading: propLoading,
+  lastRefreshed: propLastRefreshed,
+  onRefresh: propOnRefresh,
+}: MetricsLiveTableProps = {}) {
+  const [internalMetrics, setInternalMetrics] = useState<MetricRow[]>([]);
+  const [internalLoading, setInternalLoading] = useState(false);
+  const [internalLastRefreshed, setInternalLastRefreshed] = useState<Date | null>(null);
+  const [internalProjects, setInternalProjects] = useState<ProjectOption[]>([]);
+  const [internalSelectedProject, setInternalSelectedProject] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // 1. Ambil daftar project milik user yang login dari API
+  const isControlled = propMetrics !== undefined;
+
+  const metrics = isControlled ? propMetrics : internalMetrics;
+  const loading = isControlled ? (propLoading ?? false) : internalLoading;
+  const lastRefreshed = isControlled ? (propLastRefreshed ?? null) : internalLastRefreshed;
+  const projects = propProjects ?? internalProjects;
+  const selectedProject = propSelectedProject ?? internalSelectedProject;
+  const handleSelectProject = propOnSelectProject ?? setInternalSelectedProject;
+
+  // 1. Ambil daftar project milik user jika tidak di-pass dari props
   const fetchUserProjects = useCallback(async () => {
+    if (propProjects !== undefined) return;
     try {
       const res = await fetch('/api/track/projects', {
         credentials: 'include',
@@ -45,68 +73,74 @@ export function MetricsLiveTable() {
       if (res.ok) {
         const json = await res.json();
         const list: ProjectOption[] = json.data || [];
-        setProjects(list);
+        setInternalProjects(list);
         if (list.length > 0 && !selectedProject) {
           const userProject = list.find((p) => p.ownerId !== null) || list[0];
-          setSelectedProject(userProject.id);
+          handleSelectProject(userProject.id);
         }
       }
     } catch (err) {
       console.warn('[LiveTable] Failed to fetch projects:', err);
     }
-  }, [selectedProject]);
+  }, [propProjects, selectedProject, handleSelectProject]);
 
   useEffect(() => {
     fetchUserProjects();
   }, [fetchUserProjects]);
 
-  // 2. Ambil metrik untuk project terpilih
+  // 2. Ambil metrik untuk project terpilih jika mode uncontrolled
   const fetchMetrics = useCallback(async () => {
+    if (isControlled) {
+      if (propOnRefresh) propOnRefresh();
+      return;
+    }
     if (!selectedProject) return;
     try {
-      setLoading(true);
+      setInternalLoading(true);
       const res = await fetch(`/api/track/metrics?projectId=${encodeURIComponent(selectedProject)}`, {
         credentials: 'include',
         cache: 'no-store',
       });
       if (res.ok) {
         const json = await res.json();
-        setMetrics(json.data || []);
-        setLastRefreshed(new Date());
+        setInternalMetrics(json.data || []);
+        setInternalLastRefreshed(new Date());
       } else {
-        setMetrics([]);
+        setInternalMetrics([]);
       }
     } catch (err) {
       console.warn('[LiveTable] Failed to fetch metrics:', err);
     } finally {
-      setLoading(false);
+      setInternalLoading(false);
     }
-  }, [selectedProject]);
+  }, [isControlled, propOnRefresh, selectedProject]);
 
   useEffect(() => {
-    if (selectedProject) {
+    if (!isControlled && selectedProject) {
       fetchMetrics();
     }
 
-    const interval = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        fetchMetrics();
-      }
-    }, 4000);
+    if (!isControlled) {
+      const interval = setInterval(() => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+          fetchMetrics();
+        }
+      }, 4000);
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        fetchMetrics();
-      }
-    };
+      const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+          fetchMetrics();
+        }
+      };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+      document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [fetchMetrics, selectedProject]);
+      return () => {
+        clearInterval(interval);
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      };
+    }
+  }, [isControlled, fetchMetrics, selectedProject]);
 
   // Kalkulasi Ringkasan KPI
   const { totalAllClicks, maxClicks, topCta, filteredMetrics } = useMemo(() => {
@@ -205,7 +239,7 @@ export function MetricsLiveTable() {
               <FolderOpen className="w-3.5 h-3.5 text-zinc-500" />
               <select
                 value={selectedProject}
-                onChange={(e) => setSelectedProject(e.target.value)}
+                onChange={(e) => handleSelectProject(e.target.value)}
                 className="bg-transparent text-xs font-semibold text-zinc-800 focus:outline-none cursor-pointer"
               >
                 {projects.map((proj) => (

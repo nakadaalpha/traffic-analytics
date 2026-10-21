@@ -594,14 +594,17 @@ app.get('/api/track/events', async (c) => {
       }
     }
 
+    const limitParam = parseInt(c.req.query('limit') || '200', 10);
+    const limit = isNaN(limitParam) ? 200 : Math.min(Math.max(limitParam, 1), 1000);
+
     const { results } = await c.env.DB.prepare(
       `SELECT CAST(id AS TEXT) as id, project_id, element_id, page_path, session_id, user_id, user_agent, ip_address, created_at 
        FROM click_events 
        WHERE project_id = ?
        ORDER BY created_at DESC 
-       LIMIT 50;`
+       LIMIT ?;`
     )
-      .bind(projectId)
+      .bind(projectId, limit)
       .all();
 
     return c.json({ success: true, projectId, count: results.length, data: results });
