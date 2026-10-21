@@ -13,6 +13,11 @@ import {
   Key,
   HelpCircle,
   AlertCircle,
+  Pencil,
+  Trash2,
+  X,
+  AlertTriangle,
+  Loader2,
 } from "lucide-react";
 
 interface ProjectData {
@@ -244,6 +249,99 @@ export default function ProjectsPage() {
     }
   };
 
+  // Edit State & Handlers
+  const [editingProject, setEditingProject] = useState<ProjectData | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDomain, setEditDomain] = useState("");
+  const [isUpdating, setIsUpdating] = useState(false);
+
+  // Delete State & Handlers
+  const [deletingProject, setDeletingProject] = useState<ProjectData | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleStartEdit = (proj: ProjectData) => {
+    setEditingProject(proj);
+    setEditName(proj.name);
+    setEditDomain(proj.allowedOrigins.join(", "));
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProject) return;
+
+    try {
+      setIsUpdating(true);
+      const res = await fetch(`/api/track/projects/${editingProject.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: editName.trim(),
+          domain: editDomain.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMessage({
+          type: "success",
+          text: `Project "${editName}" berhasil diperbarui!`,
+        });
+        setEditingProject(null);
+        await fetchProjects();
+      } else {
+        setMessage({
+          type: "error",
+          text: data.error || "Gagal memperbarui project",
+        });
+      }
+    } catch (err: any) {
+      setMessage({
+        type: "error",
+        text: err.message || "Gagal menghubungi server",
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingProject) return;
+
+    try {
+      setIsDeleting(true);
+      const res = await fetch(`/api/track/projects/${deletingProject.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setMessage({
+          type: "success",
+          text: `Project "${deletingProject.name}" berhasil dihapus.`,
+        });
+        if (selectedProject?.id === deletingProject.id) {
+          setSelectedProject(null);
+        }
+        setDeletingProject(null);
+        await fetchProjects();
+      } else {
+        setMessage({
+          type: "error",
+          text: data.error || "Gagal menghapus project",
+        });
+      }
+    } catch (err: any) {
+      setMessage({
+        type: "error",
+        text: err.message || "Gagal menghubungi server",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const activeSnippet =
     FRAMEWORK_SNIPPETS.find((f) => f.id === selectedFramework) ||
     FRAMEWORK_SNIPPETS[0];
@@ -384,10 +482,34 @@ export default function ProjectsPage() {
                       {proj.id}
                     </span>
                   </div>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    Aktif
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-semibold flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      Aktif
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleStartEdit(proj);
+                      }}
+                      className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-900 hover:bg-zinc-200/60 transition-colors cursor-pointer"
+                      title="Ubah data project"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeletingProject(proj);
+                      }}
+                      className="p-1.5 rounded-md text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                      title="Hapus project"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-2 text-xs text-zinc-600 mt-3.5">
@@ -555,6 +677,131 @@ export default function ProjectsPage() {
           </div>
         </div>
       </div>
+
+      {/* Modal Dialog: Ubah Project */}
+      {editingProject && (
+        <div className="fixed inset-0 z-50 bg-zinc-950/20 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-xl max-w-md w-full space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
+              <div className="flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-zinc-700" />
+                <h3 className="text-sm font-bold text-zinc-900">Ubah Data Project</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingProject(null)}
+                className="text-zinc-400 hover:text-zinc-700 p-1 rounded-md"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-zinc-700">Nama Website / Project</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-zinc-700">
+                  Domain Terdaftar (Pisahkan dengan koma jika lebih dari 1)
+                </label>
+                <input
+                  type="text"
+                  value={editDomain}
+                  onChange={(e) => setEditDomain(e.target.value)}
+                  className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900 font-mono"
+                  placeholder="https://myportofolio.vercel.app, http://localhost:3000"
+                  required
+                />
+                <span className="text-[10px] text-zinc-400 block">
+                  Domain localhost otomatis diizinkan untuk semua port saat pengujian lokal.
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingProject(null)}
+                  className="px-3.5 py-2 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdating}
+                  className="px-4 py-2 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white flex items-center gap-1.5 cursor-pointer shadow-sm"
+                >
+                  {isUpdating ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Menyimpan...</span>
+                    </>
+                  ) : (
+                    <span>Simpan Perubahan</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Dialog: Konfirmasi Hapus Project */}
+      {deletingProject && (
+        <div className="fixed inset-0 z-50 bg-zinc-950/20 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-xl max-w-md w-full space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-lg bg-rose-50 text-rose-600 border border-rose-200 shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-zinc-900">
+                  Hapus Project &quot;{deletingProject.name}&quot;?
+                </h3>
+                <p className="text-xs text-zinc-500 leading-relaxed">
+                  Tindakan ini tidak dapat dibatalkan. Seluruh data pelacakan klik (<code className="font-mono text-zinc-700">{deletingProject.id}</code>) dan riwayat metrik terkait akan dihapus secara permanen dari Cloudflare D1.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setDeletingProject(null)}
+                className="px-3.5 py-2 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 rounded-lg text-xs font-medium bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white flex items-center gap-1.5 cursor-pointer shadow-sm"
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Menghapus...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Ya, Hapus Project</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

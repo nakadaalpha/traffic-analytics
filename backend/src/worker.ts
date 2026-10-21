@@ -542,6 +542,117 @@ app.post('/api/track/projects', async (c) => {
   }
 });
 
+// PUT /api/track/projects/:id (Ubah data project)
+app.put('/api/track/projects/:id?', async (c) => {
+  try {
+    const currentUser = await extractCurrentUser(c);
+    if (!currentUser) {
+      return c.json({ success: false, error: 'Unauthorized: Silakan login terlebih dahulu' }, 401);
+    }
+
+    const projectId = c.req.param('id') || c.req.query('id');
+    if (!projectId) {
+      return c.json({ success: false, error: 'Project ID wajib disertakan' }, 400);
+    }
+
+    // Verifikasi kepemilikan project
+    const project = await c.env.DB.prepare(`SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`)
+      .bind(projectId)
+      .first<any>();
+
+    if (!project) {
+      return c.json({ success: false, error: 'Project tidak ditemukan' }, 404);
+    }
+
+    if (project.owner_id && project.owner_id !== currentUser.id) {
+      return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses untuk mengubah project ini' }, 403);
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const name = (body.name || '').trim();
+    const domainInput = (body.domain || '').trim();
+
+    if (!name) {
+      return c.json({ success: false, error: 'Nama project tidak boleh kosong' }, 400);
+    }
+
+    let allowedOrigins: string[] = [];
+    if (domainInput) {
+      allowedOrigins = domainInput
+        .split(/[,\n]/)
+        .map((d: string) => extractHostname(d) || d.trim().replace(/\/+$/, ''))
+        .filter(Boolean);
+    } else if (Array.isArray(body.allowedOrigins)) {
+      allowedOrigins = body.allowedOrigins;
+    }
+
+    await c.env.DB.prepare(
+      `UPDATE projects 
+       SET name = ?, allowed_origins = ? 
+       WHERE id = ?;`
+    )
+      .bind(name, JSON.stringify(allowedOrigins), projectId)
+      .run();
+
+    return c.json({
+      success: true,
+      message: 'Project berhasil diperbarui',
+      data: {
+        id: projectId,
+        name,
+        allowedOrigins,
+      },
+    });
+  } catch (error: any) {
+    console.error('[Update Project Error]', error.message);
+    return c.json({ success: false, error: error.message || 'Gagal memperbarui project' }, 500);
+  }
+});
+
+// DELETE /api/track/projects/:id (Hapus project dan seluruh data tracking terkait)
+app.delete('/api/track/projects/:id?', async (c) => {
+  try {
+    const currentUser = await extractCurrentUser(c);
+    if (!currentUser) {
+      return c.json({ success: false, error: 'Unauthorized: Silakan login terlebih dahulu' }, 401);
+    }
+
+    const projectId = c.req.param('id') || c.req.query('id');
+    if (!projectId) {
+      return c.json({ success: false, error: 'Project ID wajib disertakan' }, 400);
+    }
+
+    // Verifikasi kepemilikan project
+    const project = await c.env.DB.prepare(`SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`)
+      .bind(projectId)
+      .first<any>();
+
+    if (!project) {
+      return c.json({ success: false, error: 'Project tidak ditemukan' }, 404);
+    }
+
+    if (project.owner_id && project.owner_id !== currentUser.id) {
+      return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses untuk menghapus project ini' }, 403);
+    }
+
+    // Hapus metrics, events, dan project secara bersih
+    await c.env.DB.batch([
+      c.env.DB.prepare(`DELETE FROM cta_metrics WHERE project_id = ?;`).bind(projectId),
+      c.env.DB.prepare(`DELETE FROM click_events WHERE project_id = ?;`).bind(projectId),
+      c.env.DB.prepare(`DELETE FROM projects WHERE id = ?;`).bind(projectId),
+    ]);
+
+    return c.json({
+      success: true,
+      message: 'Project dan seluruh data analitik berhasil dihapus',
+      deletedProjectId: projectId,
+    });
+  } catch (error: any) {
+    console.error('[Delete Project Error]', error.message);
+    return c.json({ success: false, error: error.message || 'Gagal menghapus project' }, 500);
+  }
+});
+
 // GET /api/track/metrics (Cek kepemilikan project sebelum menampilkan)
 app.get('/api/track/metrics', async (c) => {
   try {
