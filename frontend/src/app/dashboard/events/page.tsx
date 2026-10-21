@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { 
   ArrowLeft, 
@@ -14,6 +14,12 @@ import {
   Smartphone,
   Tablet,
   MapPin,
+  Search,
+  ArrowUpDown,
+  ChevronUp,
+  ChevronDown,
+  Share2,
+  X,
 } from 'lucide-react';
 
 interface ClickEventRow {
@@ -159,6 +165,34 @@ function getCtaBadgeStyle(elementId: string) {
       tag: 'YouTube',
     };
   }
+  if (lower.includes('twitter') || lower.includes('x.com')) {
+    return {
+      pill: 'bg-zinc-100 border-zinc-300 text-zinc-900',
+      dot: 'bg-zinc-900',
+      tag: 'X / Twitter',
+    };
+  }
+  if (lower.includes('telegram') || lower.includes('t.me')) {
+    return {
+      pill: 'bg-sky-50/80 border-sky-200 text-sky-900',
+      dot: 'bg-sky-500',
+      tag: 'Telegram',
+    };
+  }
+  if (lower.includes('facebook') || lower.includes('fb')) {
+    return {
+      pill: 'bg-blue-50/80 border-blue-200 text-blue-900',
+      dot: 'bg-blue-600',
+      tag: 'Facebook',
+    };
+  }
+  if (lower.includes('tiktok')) {
+    return {
+      pill: 'bg-zinc-100 border-zinc-300 text-zinc-900',
+      dot: 'bg-zinc-900',
+      tag: 'TikTok',
+    };
+  }
   return {
     pill: 'bg-zinc-100 border-zinc-200 text-zinc-900',
     dot: 'bg-zinc-400',
@@ -171,6 +205,12 @@ export default function EventsPage() {
   const [loading, setLoading] = useState(false);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [selectedProject, setSelectedProject] = useState('');
+
+  // State Filter & Sorting untuk Log Event
+  const [ctaCategoryFilter, setCtaCategoryFilter] = useState<'all' | 'social'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortColumn, setSortColumn] = useState<'time' | 'element_id'>('time');
+  const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc');
 
   // 1. Fetch daftar project milik user
   const fetchUserProjects = useCallback(async () => {
@@ -243,6 +283,57 @@ export default function EventsPage() {
     };
   }, [fetchEvents, selectedProject]);
 
+  // Handler interaktif pengurutan (Sorting)
+  const handleSort = (column: 'time' | 'element_id') => {
+    if (sortColumn === column) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortColumn(column);
+      setSortDirection(column === 'time' ? 'desc' : 'asc');
+    }
+  };
+
+  // Hitung jumlah event sosial media
+  const socialEventsCount = useMemo(() => {
+    return events.filter((e) => Boolean(getCtaBadgeStyle(e.element_id).tag)).length;
+  }, [events]);
+
+  // Data event yang sudah difilter dan disort
+  const filteredEvents = useMemo(() => {
+    return events
+      .filter((evt) => {
+        // Filter sosial media
+        if (ctaCategoryFilter === 'social' && !getCtaBadgeStyle(evt.element_id).tag) {
+          return false;
+        }
+
+        // Filter kata kunci pencarian
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          const matchElement = (evt.element_id || '').toLowerCase().includes(q);
+          const matchPath = (evt.page_path || '').toLowerCase().includes(q);
+          const matchCity = (evt.city || '').toLowerCase().includes(q);
+          const matchCountry = (evt.country || '').toLowerCase().includes(q);
+          const matchId = String(evt.id).includes(q);
+          const matchSession = (evt.session_id || '').toLowerCase().includes(q);
+          return matchElement || matchPath || matchCity || matchCountry || matchId || matchSession;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortColumn === 'element_id') {
+          const cmp = a.element_id.localeCompare(b.element_id);
+          return sortDirection === 'asc' ? cmp : -cmp;
+        } else {
+          // Sort waktu
+          const timeA = new Date(a.created_at).getTime() || Number(a.id) || 0;
+          const timeB = new Date(b.created_at).getTime() || Number(b.id) || 0;
+          return sortDirection === 'asc' ? timeA - timeB : timeB - timeA;
+        }
+      });
+  }, [events, ctaCategoryFilter, searchQuery, sortColumn, sortDirection]);
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -285,8 +376,95 @@ export default function EventsPage() {
         </div>
       </div>
 
-      {/* Table Container */}
+      {/* Table Container with Filter Toolbar */}
       <div className="bg-white border border-zinc-200 rounded-xl shadow-sm overflow-hidden">
+        {/* Toolbar: Filter Kategori Tombol & Pencarian Instan */}
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-zinc-50/80 border-b border-zinc-200">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Filter Buttons */}
+            <div className="flex items-center bg-white border border-zinc-200 rounded-lg p-0.5 shadow-xs text-xs">
+              <button
+                type="button"
+                onClick={() => setCtaCategoryFilter('all')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1.5 ${
+                  ctaCategoryFilter === 'all'
+                    ? 'bg-zinc-900 text-white shadow-xs font-semibold'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                <span>Semua Tombol</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                    ctaCategoryFilter === 'all'
+                      ? 'bg-zinc-800 text-zinc-200'
+                      : 'bg-zinc-100 text-zinc-600'
+                  }`}
+                >
+                  {events.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setCtaCategoryFilter('social')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1.5 ${
+                  ctaCategoryFilter === 'social'
+                    ? 'bg-zinc-900 text-white shadow-xs font-semibold'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                <Share2 className="w-3 h-3" />
+                <span>Hanya Sosial Media</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                    ctaCategoryFilter === 'social'
+                      ? 'bg-zinc-800 text-zinc-200'
+                      : 'bg-zinc-100 text-zinc-600'
+                  }`}
+                >
+                  {socialEventsCount}
+                </span>
+              </button>
+            </div>
+
+            {/* Reset Filter Button */}
+            {(ctaCategoryFilter !== 'all' || searchQuery) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCtaCategoryFilter('all');
+                  setSearchQuery('');
+                }}
+                className="px-2.5 py-1 text-xs text-zinc-600 hover:text-zinc-900 bg-white border border-zinc-200 rounded-md shadow-xs flex items-center gap-1 cursor-pointer transition-colors"
+              >
+                <X className="w-3 h-3 text-zinc-400" />
+                <span>Reset Filter</span>
+              </button>
+            )}
+          </div>
+
+          {/* Quick Search Input */}
+          <div className="relative min-w-[220px]">
+            <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Cari tombol, path, kota..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-white border border-zinc-200 rounded-lg pl-8 pr-7 py-1 text-xs text-zinc-800 placeholder-zinc-400 focus:outline-none focus:border-zinc-400 shadow-xs"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+        </div>
+
         {events.length === 0 ? (
           <div className="py-12 px-4 text-center space-y-2">
             <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center mx-auto text-zinc-400">
@@ -297,24 +475,79 @@ export default function EventsPage() {
               Event tracking akan tercatat di sini secara berurutan segera setelah pengunjung mengklik tombol di website.
             </p>
           </div>
+        ) : filteredEvents.length === 0 ? (
+          <div className="py-12 px-4 text-center space-y-2">
+            <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center mx-auto text-zinc-400">
+              <Share2 className="w-5 h-5" />
+            </div>
+            <div className="text-sm font-semibold text-zinc-800">Tidak ada event yang cocok</div>
+            <p className="text-xs text-zinc-500 max-w-sm mx-auto">
+              Tidak ada log klik yang memenuhi kriteria filter atau kata kunci pencarian &quot;{searchQuery}&quot;.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setCtaCategoryFilter('all');
+                setSearchQuery('');
+              }}
+              className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-zinc-800 bg-white border border-zinc-200 rounded-md hover:bg-zinc-50 shadow-xs cursor-pointer"
+            >
+              <RotateCw className="w-3 h-3" />
+              <span>Kembalikan Semua Event</span>
+            </button>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs text-zinc-700">
               <thead className="text-[11px] uppercase tracking-wider bg-zinc-50 text-zinc-500 border-b border-zinc-200">
                 <tr>
                   <th className="px-5 py-3 font-semibold">ID</th>
-                  <th className="px-5 py-3 font-semibold">Element (CTA)</th>
+                  <th
+                    className="px-5 py-3 font-semibold cursor-pointer hover:text-zinc-900 transition-colors select-none"
+                    onClick={() => handleSort('element_id')}
+                    title="Klik untuk mengurutkan berdasarkan nama elemen"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span>Element (CTA)</span>
+                      {sortColumn === 'element_id' ? (
+                        sortDirection === 'asc' ? (
+                          <ChevronUp className="w-3.5 h-3.5 text-zinc-900" />
+                        ) : (
+                          <ChevronDown className="w-3.5 h-3.5 text-zinc-900" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 text-zinc-400" />
+                      )}
+                    </div>
+                  </th>
                   <th className="px-5 py-3 font-semibold">Path Halaman</th>
                   <th className="px-5 py-3 font-semibold">Perangkat</th>
                   <th className="px-5 py-3 font-semibold">Browser</th>
                   <th className="px-5 py-3 font-semibold">Lokasi (Edge Geo)</th>
                   <th className="px-5 py-3 font-semibold">IP Address (Masked)</th>
                   <th className="px-5 py-3 font-semibold">Session ID</th>
-                  <th className="px-5 py-3 font-semibold text-right">Waktu (WIB)</th>
+                  <th
+                    className="px-5 py-3 font-semibold text-right cursor-pointer hover:text-zinc-900 transition-colors select-none"
+                    onClick={() => handleSort('time')}
+                    title="Klik untuk mengurutkan berdasarkan waktu"
+                  >
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span>Waktu (WIB)</span>
+                      {sortColumn === 'time' ? (
+                        sortDirection === 'asc' ? (
+                          <ChevronUp className="w-3.5 h-3.5 text-zinc-900" />
+                        ) : (
+                          <ChevronDown className="w-3.5 h-3.5 text-zinc-900" />
+                        )
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 text-zinc-400" />
+                      )}
+                    </div>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200 bg-white">
-                {events.map((evt) => {
+                {filteredEvents.map((evt) => {
                   const dev = parseUserAgentDetails(evt.user_agent);
                   const osStyle = getOsBadgeStyle(dev.os);
                   const browserStyle = getBrowserBadgeStyle(dev.browser);
@@ -388,12 +621,14 @@ export default function EventsPage() {
           </div>
         )}
 
-        <div className="p-4 border-t border-zinc-200 bg-zinc-50/50 flex items-center justify-between text-xs text-zinc-500">
+        <div className="p-4 border-t border-zinc-200 bg-zinc-50/50 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
           <div className="flex items-center gap-1.5">
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
             <span>Kepatuhan Regulasi Privasi GDPR / UU PDP</span>
           </div>
-          <div>Total {events.length} event ditampilkan</div>
+          <div>
+            Menampilkan <strong className="text-zinc-800 font-semibold">{filteredEvents.length}</strong> dari {events.length} event
+          </div>
         </div>
       </div>
     </div>

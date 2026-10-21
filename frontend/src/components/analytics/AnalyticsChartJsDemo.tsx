@@ -25,6 +25,9 @@ import {
   AlertCircle,
   MousePointerClick,
   MapPin,
+  Filter,
+  ArrowDownUp,
+  Share2,
 } from 'lucide-react';
 
 ChartJS.register(
@@ -147,13 +150,23 @@ export default function AnalyticsChartJsDemo({
   loading = false,
 }: AnalyticsChartJsDemoProps) {
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('7d');
+  
+  // State Filter & Sorting untuk Horizontal Bar Chart CTA
+  const [ctaFilter, setCtaFilter] = useState<'all' | 'social'>('all');
+  const [ctaSort, setCtaSort] = useState<'desc' | 'asc' | 'alpha-asc' | 'alpha-desc'>('desc');
+  const [ctaLimit, setCtaLimit] = useState<number | 'all'>(5);
 
   // 1. Total Klik Nyata
   const totalClicks = useMemo(() => {
     return metrics.reduce((sum, item) => sum + (Number(item.total_clicks) || 0), 0);
   }, [metrics]);
 
-  // 2. Data Peringkat CTA Teratas (Horizontal Bar Chart) 100% Nyata dari D1
+  // Hitung berapa tombol sosial media yang terdaftar
+  const socialCtaCount = useMemo(() => {
+    return metrics.filter((m) => Boolean(getCtaBrandColor(m.element_id).label)).length;
+  }, [metrics]);
+
+  // Top CTA absolut untuk smart insights (tidak terpengaruh visual filter)
   const sortedCtaList = useMemo(() => {
     return [...metrics]
       .map((m) => ({
@@ -165,10 +178,47 @@ export default function AnalyticsChartJsDemo({
       .slice(0, 5);
   }, [metrics]);
 
-  const barData = useMemo(() => {
-    if (sortedCtaList.length === 0) {
+  // 2. Data Tombol CTA (Horizontal Bar Chart) dengan Dukungan Filter Kategori & Sorting Lengkap
+  const processedCtaList = useMemo(() => {
+    let list = [...metrics].map((m) => {
+      const brand = getCtaBrandColor(m.element_id);
       return {
-        labels: ['Belum ada data'],
+        element_id: m.element_id,
+        clicks: Number(m.total_clicks) || 0,
+        page_path: m.page_path,
+        isSocial: Boolean(brand.label),
+        socialLabel: brand.label,
+      };
+    });
+
+    // Filter sosial media jika diaktifkan
+    if (ctaFilter === 'social') {
+      list = list.filter((item) => item.isSocial);
+    }
+
+    // Sorting sesuai pilihan user
+    if (ctaSort === 'desc') {
+      list.sort((a, b) => b.clicks - a.clicks);
+    } else if (ctaSort === 'asc') {
+      list.sort((a, b) => a.clicks - b.clicks);
+    } else if (ctaSort === 'alpha-asc') {
+      list.sort((a, b) => a.element_id.localeCompare(b.element_id));
+    } else if (ctaSort === 'alpha-desc') {
+      list.sort((a, b) => b.element_id.localeCompare(a.element_id));
+    }
+
+    // Pemotongan limit tampilan
+    if (ctaLimit !== 'all') {
+      list = list.slice(0, ctaLimit);
+    }
+
+    return list;
+  }, [metrics, ctaFilter, ctaSort, ctaLimit]);
+
+  const barData = useMemo(() => {
+    if (processedCtaList.length === 0) {
+      return {
+        labels: ['Tidak ada data'],
         datasets: [
           {
             label: 'Jumlah Klik',
@@ -181,35 +231,35 @@ export default function AnalyticsChartJsDemo({
       };
     }
 
-    const backgroundColors = sortedCtaList.map((item, idx) => {
+    const backgroundColors = processedCtaList.map((item, idx) => {
       const brand = getCtaBrandColor(item.element_id);
       if (brand.label) return brand.bg;
       const zincs = ['#18181b', '#3f3f46', '#71717a', '#a1a1aa', '#d4d4d8'];
       return zincs[idx % zincs.length];
     });
 
-    const hoverColors = sortedCtaList.map((item) => {
+    const hoverColors = processedCtaList.map((item) => {
       const brand = getCtaBrandColor(item.element_id);
       if (brand.label) return brand.hover;
       return '#09090b';
     });
 
     return {
-      labels: sortedCtaList.map((item) => item.element_id),
+      labels: processedCtaList.map((item) => item.element_id),
       datasets: [
         {
           label: 'Jumlah Klik',
-          data: sortedCtaList.map((item) => item.clicks),
+          data: processedCtaList.map((item) => item.clicks),
           backgroundColor: backgroundColors,
           hoverBackgroundColor: hoverColors,
           borderRadius: 4,
-          barPercentage: sortedCtaList.length === 1 ? 0.35 : 0.6,
+          barPercentage: processedCtaList.length === 1 ? 0.35 : 0.6,
         },
       ],
     };
-  }, [sortedCtaList]);
+  }, [processedCtaList]);
 
-  const maxClickVal = sortedCtaList[0]?.clicks || 5;
+  const maxClickVal = Math.max(...processedCtaList.map((i) => i.clicks), 5);
   const barOptions: any = {
     indexAxis: 'y' as const,
     responsive: true,
@@ -225,7 +275,7 @@ export default function AnalyticsChartJsDemo({
         displayColors: false,
         callbacks: {
           label: (context: any) => {
-            const rawId = sortedCtaList[context.dataIndex]?.element_id || '';
+            const rawId = processedCtaList[context.dataIndex]?.element_id || '';
             const brand = getCtaBrandColor(rawId);
             const tag = brand.label ? ` (${brand.label})` : '';
             return ` ${context.parsed.x} total klik tercatat${tag}`;
@@ -665,28 +715,150 @@ export default function AnalyticsChartJsDemo({
 
       {/* Grid Bawah: Performa CTA Teratas & Kotak Wawasan Otomatis */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Performa CTA (Horizontal Bar) */}
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-3">
-          <div className="flex items-center justify-between">
+        {/* Performa CTA (Horizontal Bar) dengan Filter & Sorting */}
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <div className="p-2 rounded-lg bg-zinc-100 text-zinc-800">
                 <BarChart2 className="w-4 h-4" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-zinc-900">Peringkat CTA Teratas</h3>
+                <h3 className="text-sm font-bold text-zinc-900">Peringkat &amp; Distribusi Tombol (CTA)</h3>
                 <p className="text-[11px] text-zinc-500">
-                  {sortedCtaList.length} tombol terdaftar pada proyek ini
+                  {processedCtaList.length} dari {metrics.length} tombol ditampilkan
                 </p>
               </div>
             </div>
-            <span className="text-xs text-zinc-500 font-mono">
+            <span className="text-xs text-zinc-600 font-mono bg-zinc-50 px-2 py-0.5 rounded border border-zinc-200">
               Total {totalClicks} Klik
             </span>
           </div>
 
-          <div className="h-48 w-full pt-2">
-            <Bar data={barData} options={barOptions} />
+          {/* Controls Bar: Filter Kategori & Opsi Sorting */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1 border-t border-zinc-100">
+            {/* Filter Pill: Semua vs Sosial Media */}
+            <div className="flex items-center bg-zinc-100 p-0.5 rounded-lg border border-zinc-200 text-xs">
+              <button
+                type="button"
+                onClick={() => setCtaFilter('all')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1.5 ${
+                  ctaFilter === 'all'
+                    ? 'bg-white text-zinc-900 shadow-xs border border-zinc-200/60 font-semibold'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                <span>Semua</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-zinc-200/60 text-zinc-700">
+                  {metrics.length}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCtaFilter('social')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer flex items-center gap-1.5 ${
+                  ctaFilter === 'social'
+                    ? 'bg-white text-zinc-900 shadow-xs border border-zinc-200/60 font-semibold'
+                    : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                <Share2 className="w-3 h-3 text-zinc-600" />
+                <span>Hanya Sosmed</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-zinc-200/60 text-zinc-700">
+                  {socialCtaCount}
+                </span>
+              </button>
+            </div>
+
+            {/* Sort & Limit Controls */}
+            <div className="flex items-center gap-2">
+              {/* Dropdown Sorting */}
+              <div className="flex items-center gap-1 bg-white border border-zinc-200 rounded-lg px-2 py-1 text-xs shadow-xs">
+                <ArrowDownUp className="w-3 h-3 text-zinc-400 shrink-0" />
+                <select
+                  value={ctaSort}
+                  onChange={(e) => setCtaSort(e.target.value as any)}
+                  className="bg-transparent text-xs font-medium text-zinc-800 focus:outline-none cursor-pointer"
+                >
+                  <option value="desc">Klik Terbanyak</option>
+                  <option value="asc">Klik Tersedikit</option>
+                  <option value="alpha-asc">Nama (A - Z)</option>
+                  <option value="alpha-desc">Nama (Z - A)</option>
+                </select>
+              </div>
+
+              {/* Limit Pill: 5 / 10 / Semua */}
+              <div className="flex items-center bg-zinc-100 p-0.5 rounded-lg border border-zinc-200 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setCtaLimit(5)}
+                  className={`px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                    ctaLimit === 5
+                      ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+                      : 'text-zinc-600 hover:text-zinc-900'
+                  }`}
+                >
+                  Top 5
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCtaLimit(10)}
+                  className={`px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                    ctaLimit === 10
+                      ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+                      : 'text-zinc-600 hover:text-zinc-900'
+                  }`}
+                >
+                  Top 10
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCtaLimit('all')}
+                  className={`px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                    ctaLimit === 'all'
+                      ? 'bg-white text-zinc-900 shadow-xs font-semibold'
+                      : 'text-zinc-600 hover:text-zinc-900'
+                  }`}
+                >
+                  Semua
+                </button>
+              </div>
+            </div>
           </div>
+
+          {/* Chart Display / Empty State */}
+          {processedCtaList.length === 0 ? (
+            <div className="h-48 flex flex-col items-center justify-center text-center p-4 rounded-lg bg-zinc-50 border border-dashed border-zinc-200">
+              <Share2 className="w-6 h-6 text-zinc-400 mb-2" />
+              <p className="text-xs font-semibold text-zinc-700">
+                {ctaFilter === 'social'
+                  ? 'Tidak ada tombol media sosial yang terdeteksi pada proyek ini'
+                  : 'Belum ada data interaksi tombol'}
+              </p>
+              <p className="text-[11px] text-zinc-500 mt-1 max-w-xs">
+                {ctaFilter === 'social'
+                  ? 'Tombol media sosial seperti WhatsApp, Instagram, Gmail, dll belum menerima klik.'
+                  : 'Klik tombol di website untuk mulai merekam distribusi interaksi.'}
+              </p>
+              {ctaFilter === 'social' && (
+                <button
+                  type="button"
+                  onClick={() => setCtaFilter('all')}
+                  className="mt-3 px-3 py-1 text-xs font-medium text-zinc-800 bg-white border border-zinc-200 rounded-md hover:bg-zinc-50 cursor-pointer shadow-xs"
+                >
+                  Tampilkan Semua Tombol
+                </button>
+              )}
+            </div>
+          ) : (
+            <div
+              className="w-full pt-2 transition-all duration-300"
+              style={{
+                height: `${Math.max(192, Math.min(360, processedCtaList.length * 34 + 40))}px`,
+              }}
+            >
+              <Bar data={barData} options={barOptions} />
+            </div>
+          )}
         </div>
 
         {/* Wawasan Analisa Otomatis (Smart Insights) */}
