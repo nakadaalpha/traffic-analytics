@@ -33,7 +33,7 @@ interface FrameworkGuide {
 const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   {
     id: 'vite',
-    name: 'React + Vite',
+    name: 'React (Vite)',
     badge: 'Paling Populer',
     fileTarget: 'index.html (di dalam tag <head>)',
     getCode: (auto) => `<script
@@ -64,7 +64,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   },
   {
     id: 'html',
-    name: 'HTML / PHP / WordPress / Shopify',
+    name: 'HTML / PHP / WordPress',
     badge: 'Universal',
     fileTarget: 'index.html / header.php / footer.php',
     getCode: (auto) => `<script
@@ -78,7 +78,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   },
   {
     id: 'vue',
-    name: 'Vue.js / Nuxt',
+    name: 'Vue / Nuxt 3',
     badge: 'Vue 3 & Nuxt 3',
     fileTarget: 'index.html (Vue) atau nuxt.config.ts (Nuxt)',
     getCode: (auto) => `<script
@@ -121,19 +121,32 @@ export default function DocsPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      {/* Header */}
-      <div>
-        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-100 border border-zinc-200 text-zinc-700 text-xs font-medium mb-3">
-          <BookOpen className="w-3.5 h-3.5 text-zinc-500" />
-          <span>Panduan Integrasi SDK</span>
+    <div className="space-y-6">
+      {/* Unified Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-zinc-100 border border-zinc-200 text-zinc-900 flex items-center justify-center shrink-0">
+              <BookOpen className="w-4 h-4" />
+            </div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900">
+              Panduan Integrasi &amp; Pemasangan Script
+            </h1>
+          </div>
+          <p className="text-xs text-zinc-500 leading-relaxed pl-10.5">
+            Pemasangan membutuhkan waktu kurang dari 2 menit. Sisipkan script di website Anda untuk pelacakan tombol instan.
+          </p>
         </div>
-        <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 tracking-tight">
-          Cara Memasang Script Tracker ke Website Anda
-        </h1>
-        <p className="text-xs text-zinc-500 mt-1.5 leading-relaxed">
-          Pemasangan membutuhkan waktu kurang dari 2 menit. Sisipkan script di website Anda dan tambahkan atribut penanda pada tombol atau link yang ingin dilacak.
-        </p>
+
+        <div className="flex items-center gap-2.5 self-start sm:self-auto">
+          <Link
+            href="/dashboard/projects"
+            className="h-9 px-3.5 text-xs bg-zinc-900 hover:bg-zinc-800 text-white font-medium rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-[0.98]"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Generator Script Proyek</span>
+          </Link>
+        </div>
       </div>
 
       {/* Tabs Pilihan Framework */}

@@ -364,42 +364,50 @@ export default function EventsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <FileText className="w-5 h-5 text-zinc-900" />
-            <h1 className="text-xl font-bold text-zinc-900">Event Logs Mentah (Raw Ingestion)</h1>
+      {/* Unified Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-zinc-100 border border-zinc-200 text-zinc-900 flex items-center justify-center shrink-0">
+              <FileText className="w-4 h-4" />
+            </div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900">
+              Event Logs Mentah (Raw Ingestion)
+            </h1>
           </div>
-          <p className="text-xs text-zinc-500 mt-1">
+          <p className="text-xs text-zinc-500 leading-relaxed pl-10.5">
             Riwayat 50 event klik terakhir untuk keperluan verifikasi dan debugging teknis.
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
           {/* Project Selector */}
-          <div className="flex items-center gap-1.5 bg-white border border-zinc-200 rounded-lg px-2.5 py-1.5 shadow-sm">
-            <FolderOpen className="w-3.5 h-3.5 text-zinc-500" />
-            <select
-              value={selectedProject}
-              onChange={(e) => setSelectedProject(e.target.value)}
-              className="bg-transparent text-xs font-semibold text-zinc-800 focus:outline-none cursor-pointer"
-            >
-              {projects.map((proj) => (
-                <option key={proj.id} value={proj.id}>
-                  {proj.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {projects.length > 0 && (
+            <div className="h-9 flex items-center gap-2 bg-white border border-zinc-200 rounded-lg px-3 shadow-xs">
+              <FolderOpen className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+              <select
+                value={selectedProject}
+                onChange={(e) => setSelectedProject(e.target.value)}
+                className="bg-transparent text-xs font-semibold text-zinc-800 focus:outline-none cursor-pointer pr-1"
+              >
+                {projects.map((proj) => (
+                  <option key={proj.id} value={proj.id}>
+                    {proj.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <button
+            type="button"
             onClick={fetchEvents}
             disabled={loading}
-            className="px-3 py-1.5 text-xs font-medium bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white rounded-lg shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-[0.98]"
+            className="h-9 px-3.5 text-xs bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-[0.98]"
+            title="Segarkan data secara manual"
           >
             <RotateCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-            <span>Segarkan</span>
+            <span>{loading ? 'Memuat...' : 'Segarkan Data'}</span>
           </button>
         </div>
       </div>

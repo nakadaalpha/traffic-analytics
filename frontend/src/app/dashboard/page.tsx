@@ -123,36 +123,37 @@ export default function DashboardOverviewPage() {
   return (
     <div className="space-y-6">
       {/* Top Banner / Welcome & Global Project Selector */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 flex items-center gap-2">
-            <BarChart3 className="w-6 h-6 text-zinc-800" />
-            <span>Ringkasan Metrik CTA Real-Time</span>
-          </h1>
-          <p className="text-xs text-zinc-500 mt-1">
-            Pantau performa konversi klik dan CTA di seluruh halaman web secara otomatis
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-zinc-100 border border-zinc-200 text-zinc-900 flex items-center justify-center shrink-0">
+              <BarChart3 className="w-4 h-4" />
+            </div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900">
+              Ringkasan Metrik CTA Real-Time
+            </h1>
+          </div>
+          <p className="text-xs text-zinc-500 leading-relaxed pl-10.5">
+            Pantau performa konversi klik dan CTA di seluruh halaman web secara otomatis.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
           {/* Global Project Selector */}
           {projects.length > 0 && (
-            <div className="flex items-center gap-2 bg-white border border-zinc-200 rounded-lg px-3 py-1.5 shadow-sm">
-              <FolderOpen className="w-4 h-4 text-zinc-500" />
-              <div className="flex flex-col">
-                <select
-                  value={selectedProject}
-                  onChange={(e) => setSelectedProject(e.target.value)}
-                  className="bg-transparent text-xs font-bold text-zinc-900 focus:outline-none cursor-pointer pr-1"
-                >
-                  {projects.map((proj) => (
-                    <option key={proj.id} value={proj.id}>
-                      {proj.name} 
-                      {/* ({proj.id}) */}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className="h-9 flex items-center gap-2 bg-white border border-zinc-200 rounded-lg px-3 shadow-xs">
+              <FolderOpen className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+              <select
+                value={selectedProject}
+                onChange={(e) => setSelectedProject(e.target.value)}
+                className="bg-transparent text-xs font-semibold text-zinc-800 focus:outline-none cursor-pointer pr-1"
+              >
+                {projects.map((proj) => (
+                  <option key={proj.id} value={proj.id}>
+                    {proj.name}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
 
@@ -160,7 +161,7 @@ export default function DashboardOverviewPage() {
             type="button"
             onClick={fetchProjectData}
             disabled={loading}
-            className="px-3 py-2 text-xs bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm"
+            className="h-9 px-3.5 text-xs bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-[0.98]"
             title="Segarkan data secara manual"
           >
             <RotateCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />

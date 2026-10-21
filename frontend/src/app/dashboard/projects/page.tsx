@@ -20,6 +20,7 @@ import {
   Loader2,
   Sparkles,
   SlidersHorizontal,
+  RotateCw,
 } from "lucide-react";
 
 interface ProjectData {
@@ -322,19 +323,35 @@ export default function ProjectsPage() {
   };
 
   return (
-    <div className="space-y-8 max-w-5xl">
-      {/* Header */}
-      <div>
-        <div className="flex items-center gap-2 text-zinc-900">
-          <Layers className="w-5 h-5 text-zinc-900" />
-          <h1 className="text-xl font-bold">
-            Manajemen Project &amp; Pemasangan Script
-          </h1>
+    <div className="space-y-6">
+      {/* Unified Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-zinc-100 border border-zinc-200 text-zinc-900 flex items-center justify-center shrink-0">
+              <Layers className="w-4 h-4" />
+            </div>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900">
+              Manajemen Project &amp; Pemasangan Script
+            </h1>
+          </div>
+          <p className="text-xs text-zinc-500 leading-relaxed pl-10.5">
+            Daftarkan website baru Anda dan dapatkan panduan kode siap pakai untuk framework apa pun.
+          </p>
         </div>
-        <p className="text-xs text-zinc-500 mt-1">
-          Daftarkan website baru Anda dan dapatkan panduan kode siap pakai untuk
-          framework apa pun.
-        </p>
+
+        <div className="flex items-center gap-2.5 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={fetchProjects}
+            disabled={loading}
+            className="h-9 px-3.5 text-xs bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-[0.98]"
+            title="Segarkan daftar project"
+          >
+            <RotateCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+            <span>{loading ? "Memuat..." : "Segarkan Data"}</span>
+          </button>
+        </div>
       </div>
 
       {/* Formulir Tambah Project Baru */}
@@ -424,8 +441,14 @@ export default function ProjectsPage() {
             Memuat data project...
           </div>
         ) : projects.length === 0 ? (
-          <div className="p-8 text-center text-xs text-zinc-500 border border-dashed border-zinc-200 rounded-xl">
-            Belum ada project terdaftar. Gunakan formulir di atas untuk mendaftarkan website baru.
+          <div className="py-12 px-4 text-center space-y-2 border border-zinc-200 rounded-xl bg-zinc-50/50">
+            <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center mx-auto text-zinc-400">
+              <FolderCheck className="w-5 h-5" />
+            </div>
+            <div className="text-sm font-semibold text-zinc-800">Belum ada project terdaftar</div>
+            <p className="text-xs text-zinc-500 max-w-sm mx-auto">
+              Gunakan formulir di atas untuk mendaftarkan website baru Anda.
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
