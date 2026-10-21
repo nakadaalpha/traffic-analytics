@@ -57,7 +57,7 @@ function parseUserAgentDetails(ua: string | null | undefined) {
     deviceType = 'Desktop';
     if (lower.includes('macintosh') || lower.includes('mac os')) os = 'macOS';
     else if (lower.includes('windows')) os = 'Windows';
-    else if (lower.includes('linux')) os = 'Linux';
+    else if (lower.includes('linux') || lower.includes('x11') || lower.includes('ubuntu')) os = 'Linux';
     else os = 'Desktop';
   }
 

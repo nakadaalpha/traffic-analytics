@@ -106,6 +106,39 @@ function getCtaBrandColor(elementId: string): { bg: string; hover: string; label
   return { bg: '#18181b', hover: '#27272a', label: '' };
 }
 
+// Helper deteksi Sistem Operasi (OS) dari User-Agent
+function parseOs(ua: string | null | undefined): string {
+  if (!ua) return 'Lainnya';
+  const lower = ua.toLowerCase();
+  if (lower.includes('ipad')) return 'iPadOS';
+  if (lower.includes('iphone') || lower.includes('ios')) return 'iOS';
+  if (lower.includes('android')) return 'Android';
+  if (lower.includes('macintosh') || lower.includes('mac os')) return 'macOS';
+  if (lower.includes('windows')) return 'Windows';
+  if (lower.includes('linux') || lower.includes('x11') || lower.includes('ubuntu')) return 'Linux';
+  return 'Lainnya';
+}
+
+// Helper warna brand resmi untuk Sistem Operasi
+function getOsColor(os: string): { bg: string; hover: string } {
+  switch (os) {
+    case 'macOS':
+      return { bg: '#18181b', hover: '#09090b' }; // Apple Slate Black
+    case 'Windows':
+      return { bg: '#0284c7', hover: '#0369a1' }; // Windows Sky Blue
+    case 'Android':
+      return { bg: '#16a34a', hover: '#15803d' }; // Android Emerald Green
+    case 'iOS':
+      return { bg: '#6366f1', hover: '#4f46e5' }; // Apple iOS Indigo
+    case 'iPadOS':
+      return { bg: '#8b5cf6', hover: '#7c3aed' }; // iPadOS Purple
+    case 'Linux':
+      return { bg: '#ea580c', hover: '#c2410c' }; // Linux Ubuntu Orange
+    default:
+      return { bg: '#71717a', hover: '#52525b' }; // Neutral Zinc
+  }
+}
+
 export default function AnalyticsChartJsDemo({
   projectId = '',
   projectName = '',
@@ -214,47 +247,41 @@ export default function AnalyticsChartJsDemo({
     },
   };
 
-  // 3. Data Distribusi Perangkat (Doughnut Chart) Nyata dari user_agent
-  const deviceStats = useMemo(() => {
-    let mobile = 0;
-    let desktop = 0;
-    let tablet = 0;
-
+  // 3. Data Distribusi Sistem Operasi & Perangkat (Doughnut Chart) Nyata dari user_agent
+  const osStats = useMemo(() => {
+    const counts: Record<string, number> = {};
     events.forEach((ev) => {
-      const ua = (ev.user_agent || '').toLowerCase();
-      if (ua.includes('ipad') || ua.includes('tablet')) {
-        tablet++;
-      } else if (ua.includes('mobile') || ua.includes('android') || ua.includes('iphone')) {
-        mobile++;
-      } else {
-        desktop++;
-      }
+      const os = parseOs(ev.user_agent);
+      counts[os] = (counts[os] || 0) + 1;
     });
 
     const total = events.length;
     if (total === 0) {
-      return { mobile: 0, desktop: 0, tablet: 0, mobilePct: 0, desktopPct: 0, tabletPct: 0, total: 0, dominant: 'None' };
+      return { list: [], total: 0, dominant: 'No Data', dominantPct: 0 };
     }
 
-    const mobilePct = Math.round((mobile / total) * 100);
-    const desktopPct = Math.round((desktop / total) * 100);
-    const tabletPct = Math.max(0, 100 - mobilePct - desktopPct);
+    const list = Object.entries(counts)
+      .map(([name, count]) => {
+        const pct = Math.round((count / total) * 100);
+        return {
+          name,
+          count,
+          pct,
+          color: getOsColor(name),
+        };
+      })
+      .sort((a, b) => b.count - a.count);
 
-    let dominant = 'Desktop';
-    let dominantPct = desktopPct;
-    if (mobilePct > desktopPct && mobilePct >= tabletPct) {
-      dominant = 'Mobile';
-      dominantPct = mobilePct;
-    } else if (tabletPct > desktopPct && tabletPct > mobilePct) {
-      dominant = 'Tablet';
-      dominantPct = tabletPct;
-    }
-
-    return { mobile, desktop, tablet, mobilePct, desktopPct, tabletPct, total, dominant, dominantPct };
+    return {
+      list,
+      total,
+      dominant: list[0]?.name || 'Unknown',
+      dominantPct: list[0]?.pct || 0,
+    };
   }, [events]);
 
   const doughnutData = useMemo(() => {
-    if (deviceStats.total === 0) {
+    if (osStats.total === 0) {
       return {
         labels: ['Belum Ada Pengunjung'],
         datasets: [
@@ -269,22 +296,19 @@ export default function AnalyticsChartJsDemo({
     }
 
     return {
-      labels: ['Mobile Phone', 'Desktop PC', 'Tablet'],
+      labels: osStats.list.map((item) => item.name),
       datasets: [
         {
-          data: [deviceStats.mobilePct, deviceStats.desktopPct, deviceStats.tabletPct],
-          backgroundColor: [
-            '#16a34a', // emerald-600 (mobile)
-            '#2563eb', // blue-600 (desktop)
-            '#9333ea', // purple-600 (tablet)
-          ],
+          data: osStats.list.map((item) => item.pct),
+          backgroundColor: osStats.list.map((item) => item.color.bg),
+          hoverBackgroundColor: osStats.list.map((item) => item.color.hover),
           borderColor: '#ffffff',
           borderWidth: 2,
           hoverOffset: 4,
         },
       ],
     };
-  }, [deviceStats]);
+  }, [osStats]);
 
   const doughnutOptions: any = {
     responsive: true,
@@ -300,7 +324,11 @@ export default function AnalyticsChartJsDemo({
         cornerRadius: 8,
         displayColors: true,
         callbacks: {
-          label: (context: any) => ` ${context.label}: ${context.parsed}%`,
+          label: (context: any) => {
+            const item = osStats.list[context.dataIndex];
+            if (!item) return ` ${context.parsed}%`;
+            return ` ${item.name}: ${context.parsed}% (${item.count} klik)`;
+          },
         },
       },
     },
@@ -470,20 +498,12 @@ export default function AnalyticsChartJsDemo({
       }
     }
 
-    let devTitle = 'Belum Ada Data Perangkat';
+    let devTitle = 'Belum Ada Data Sistem Operasi';
     let devDesc = 'Menunggu klik dari pengunjung untuk memetakan jenis perangkat.';
 
-    if (deviceStats.total > 0) {
-      if (deviceStats.dominant === 'Desktop') {
-        devTitle = `Mayoritas Pengguna Menggunakan Desktop (${deviceStats.desktopPct}%)`;
-        devDesc = `Interaksi didominasi oleh pengguna komputer desktop/laptop (${deviceStats.desktop} dari ${deviceStats.total} klik). Pastikan tombol CTA terlihat kontras pada resolusi layar lebar.`;
-      } else if (deviceStats.dominant === 'Mobile') {
-        devTitle = `Mayoritas Pengguna Menggunakan Smartphone (${deviceStats.mobilePct}%)`;
-        devDesc = `Interaksi didominasi oleh layar ponsel (${deviceStats.mobile} dari ${deviceStats.total} klik). Pastikan tombol CTA memiliki tinggi minimal 44px agar ramah sentuhan jempol.`;
-      } else {
-        devTitle = `Akses Terdistribusi Merata (${deviceStats.total} klik)`;
-        devDesc = `Pengunjung berinteraksi melalui berbagai perangkat secara berimbang. Pertahankan responsivitas halaman.`;
-      }
+    if (osStats.total > 0) {
+      devTitle = `Mayoritas Pengguna Menggunakan ${osStats.dominant} (${osStats.dominantPct}%)`;
+      devDesc = `Interaksi didominasi oleh pengguna ${osStats.dominant} (${osStats.list[0]?.count} dari ${osStats.total} klik). Tampilan halaman dan tombol CTA terbukti berjalan optimal di platform tersebut.`;
     }
 
     const isHealthy = Number(sessionRatio) <= 3.0;
@@ -511,7 +531,7 @@ export default function AnalyticsChartJsDemo({
       isHealthy,
       topCities,
     };
-  }, [sortedCtaList, totalClicks, events, deviceStats]);
+  }, [sortedCtaList, totalClicks, events, osStats]);
 
   return (
     <div className="space-y-6">
@@ -603,8 +623,8 @@ export default function AnalyticsChartJsDemo({
               <Smartphone className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-zinc-900">Perangkat Pengunjung</h3>
-              <p className="text-[11px] text-zinc-500">Berdasarkan User-Agent Nyata</p>
+              <h3 className="text-sm font-bold text-zinc-900">Sistem Operasi (OS)</h3>
+              <p className="text-[11px] text-zinc-500">Berdasarkan Perangkat Nyata Pengunjung</p>
             </div>
           </div>
 
@@ -613,37 +633,32 @@ export default function AnalyticsChartJsDemo({
             <Doughnut data={doughnutData} options={doughnutOptions} />
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
               <span className="text-2xl font-black text-zinc-900">
-                {deviceStats.total > 0 ? `${deviceStats.dominantPct}%` : '0%'}
+                {osStats.total > 0 ? `${osStats.dominantPct}%` : '0%'}
               </span>
               <span className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider">
-                {deviceStats.total > 0 ? deviceStats.dominant : 'No Data'}
+                {osStats.total > 0 ? osStats.dominant : 'No Data'}
               </span>
             </div>
           </div>
 
-          {/* Legend Items */}
-          <div className="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-100 text-center">
-            <div className="space-y-0.5">
-              <div className="text-xs font-bold text-zinc-900">{deviceStats.mobilePct}%</div>
-              <div className="text-[10px] text-zinc-500 flex items-center justify-center gap-1 font-medium">
-                <span className="w-2 h-2 rounded-full bg-emerald-600" />
-                <span>Mobile ({deviceStats.mobile})</span>
-              </div>
-            </div>
-            <div className="space-y-0.5">
-              <div className="text-xs font-bold text-zinc-900">{deviceStats.desktopPct}%</div>
-              <div className="text-[10px] text-zinc-500 flex items-center justify-center gap-1 font-medium">
-                <span className="w-2 h-2 rounded-full bg-blue-600" />
-                <span>Desktop ({deviceStats.desktop})</span>
-              </div>
-            </div>
-            <div className="space-y-0.5">
-              <div className="text-xs font-bold text-zinc-900">{deviceStats.tabletPct}%</div>
-              <div className="text-[10px] text-zinc-500 flex items-center justify-center gap-1 font-medium">
-                <span className="w-2 h-2 rounded-full bg-purple-600" />
-                <span>Tablet ({deviceStats.tablet})</span>
-              </div>
-            </div>
+          {/* Legend Items Dinamis per OS */}
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2.5 border-t border-zinc-100 text-center">
+            {osStats.total === 0 ? (
+              <span className="text-xs text-zinc-400 py-1">Belum ada data OS terdeteksi</span>
+            ) : (
+              osStats.list.map((item) => (
+                <div key={item.name} className="space-y-0.5 px-2">
+                  <div className="text-xs font-bold text-zinc-900">{item.pct}%</div>
+                  <div className="text-[10px] text-zinc-500 flex items-center justify-center gap-1 font-medium">
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: item.color.bg }}
+                    />
+                    <span>{item.name} ({item.count})</span>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
