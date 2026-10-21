@@ -41,7 +41,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
   data-auto-capture="${auto ? 'true' : 'false'}"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+  src="https://firenalytics.vercel.app/tracker.js">
 </script>`,
     note: 'Sisipkan di dalam tag <head> pada index.html. Otomatis mendukung localhost:5173.',
   },
@@ -57,7 +57,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
   data-auto-capture="${auto ? 'true' : 'false'}"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+  src="https://firenalytics.vercel.app/tracker.js"
   strategy="afterInteractive"
 />`,
     note: 'Sisipkan di dalam RootLayout. strategy="afterInteractive" menjaga kecepatan First Contentful Paint.',
@@ -72,7 +72,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
   data-auto-capture="${auto ? 'true' : 'false'}"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+  src="https://firenalytics.vercel.app/tracker.js">
 </script>`,
     note: 'Sisipkan sebelum </head> atau sebelum </body> (mendukung WordPress, Shopify, Webflow, PHP).',
   },
@@ -86,7 +86,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
   data-auto-capture="${auto ? 'true' : 'false'}"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+  src="https://firenalytics.vercel.app/tracker.js">
 </script>`,
     note: 'Untuk Nuxt 3, tambahkan script ke app.head.script di nuxt.config.ts. Untuk Vue Vite, sisipkan di index.html.',
   },
@@ -100,7 +100,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
   data-auto-capture="${auto ? 'true' : 'false'}"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+  src="https://firenalytics.vercel.app/tracker.js"
 ></script>`,
     note: 'Sisipkan di dalam tag <head> pada berkas Layout.astro utama Anda.',
   },

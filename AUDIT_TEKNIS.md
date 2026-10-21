@@ -15,7 +15,7 @@ Berikut adalah laporan audit teknis mendalam (*deep repository inspection & tech
   - **Styling System:** Murni **Tailwind CSS v3.4** (`frontend/tailwind.config.ts`). Tidak menggunakan komponen pihak ketiga (shadcn/ui, Radix, Headless UI tidak diinstal).
   - **State Management:** Native React Hooks (`useState`, `useEffect`, `useCallback`) dengan pola Smart Polling terkoordinasi (Zustand, Redux, TanStack Query tidak digunakan).
 - **Layanan Pihak Ketiga & Infrastruktur:**
-  - **Frontend Hosting:** Vercel CDN (`https://traffic-analytics-taupe.vercel.app`).
+  - **Frontend Hosting:** Vercel CDN (`https://firenalytics.vercel.app`).
   - **Backend API Hosting:** Cloudflare Workers Edge Network (`https://traffic-analytics-api.fireup-dist.workers.dev`).
   - **Database Hosting:** Cloudflare D1 (Database Name: `traffic_analytics_db`, Binding: `DB`, UUID: `3e7b6518-8ad8-4030-8677-c58f8c5460cf`).
   - **Storage / Real-time / Payment:** Tidak ada dependensi Cloudinary/S3, Pusher, maupun Payment Gateway. Real-time dijalankan melalui client-side visibility-aware polling.

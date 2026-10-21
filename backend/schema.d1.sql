@@ -31,7 +31,7 @@ VALUES (
     'prj_default', 
     'Default Web Project', 
     'pk_live_demo12345', 
-    '["https://traffic-analytics-taupe.vercel.app","http://localhost:3000"]', 
+    '["https://firenalytics.vercel.app","http://localhost:3000"]', 
     1
 );
 

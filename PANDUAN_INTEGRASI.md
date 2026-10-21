@@ -35,7 +35,7 @@ Cukup buka file `index.html` yang berada di folder root project Anda, lalu sisip
       defer
       data-project-id="GANTI_DENGAN_PROJECT_ID_ANDA"
       data-write-key="GANTI_DENGAN_WRITE_KEY_ANDA"
-      src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+      src="https://firenalytics.vercel.app/tracker.js">
     </script>
   </head>
   <body>
@@ -62,7 +62,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           defer
           data-project-id="GANTI_DENGAN_PROJECT_ID_ANDA"
           data-write-key="GANTI_DENGAN_WRITE_KEY_ANDA"
-          src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+          src="https://firenalytics.vercel.app/tracker.js"
           strategy="afterInteractive"
         />
       </head>
@@ -89,7 +89,7 @@ export default function Document() {
           defer
           data-project-id="GANTI_DENGAN_PROJECT_ID_ANDA"
           data-write-key="GANTI_DENGAN_WRITE_KEY_ANDA"
-          src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+          src="https://firenalytics.vercel.app/tracker.js"
         />
       </Head>
       <body>
@@ -117,7 +117,7 @@ export default defineNuxtConfig({
           defer: true,
           'data-project-id': 'GANTI_DENGAN_PROJECT_ID_ANDA',
           'data-write-key': 'GANTI_DENGAN_WRITE_KEY_ANDA',
-          src: 'https://traffic-analytics-taupe.vercel.app/tracker.js',
+          src: 'https://firenalytics.vercel.app/tracker.js',
         },
       ],
     },
@@ -143,7 +143,7 @@ Buka file layout utama Anda (misal: `src/layouts/Layout.astro`), lalu sisipkan d
       defer
       data-project-id="GANTI_DENGAN_PROJECT_ID_ANDA"
       data-write-key="GANTI_DENGAN_WRITE_KEY_ANDA"
-      src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+      src="https://firenalytics.vercel.app/tracker.js"
     ></script>
   </head>
   <body>
@@ -163,7 +163,7 @@ Cukup sisipkan tag script ini sebelum tag penutup `</head>` atau tepat sebelum t
   defer
   data-project-id="GANTI_DENGAN_PROJECT_ID_ANDA"
   data-write-key="GANTI_DENGAN_WRITE_KEY_ANDA"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+  src="https://firenalytics.vercel.app/tracker.js">
 </script>
 ```
 

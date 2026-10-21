@@ -49,7 +49,7 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   data-project-id="${pid}"
   data-write-key="${key}"
   data-auto-capture="${auto ? 'true' : 'false'}"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+  src="https://firenalytics.vercel.app/tracker.js">
 </script>`,
     note: "Sisipkan di dalam tag <head> pada index.html. Otomatis mendukung localhost:5173.",
   },
@@ -64,7 +64,7 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   data-project-id="${pid}"
   data-write-key="${key}"
   data-auto-capture="${auto ? 'true' : 'false'}"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+  src="https://firenalytics.vercel.app/tracker.js"
   strategy="afterInteractive"
 />`,
     note: 'Sisipkan di dalam RootLayout. strategy="afterInteractive" menjaga kecepatan First Contentful Paint.',
@@ -78,7 +78,7 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   data-project-id="${pid}"
   data-write-key="${key}"
   data-auto-capture="${auto ? 'true' : 'false'}"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+  src="https://firenalytics.vercel.app/tracker.js">
 </script>`,
     note: "Sisipkan sebelum </head> atau sebelum </body> (mendukung WordPress, Webflow, Shopify, Laravel).",
   },
@@ -91,7 +91,7 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   data-project-id="${pid}"
   data-write-key="${key}"
   data-auto-capture="${auto ? 'true' : 'false'}"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+  src="https://firenalytics.vercel.app/tracker.js">
 </script>`,
     note: "Untuk Nuxt 3, sisipkan konfigurasi script di properti app.head.script pada nuxt.config.ts.",
   },
@@ -104,7 +104,7 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   data-project-id="${pid}"
   data-write-key="${key}"
   data-auto-capture="${auto ? 'true' : 'false'}"
-  src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+  src="https://firenalytics.vercel.app/tracker.js"
 ></script>`,
     note: "Sisipkan di dalam tag <head> pada berkas Layout.astro utama Anda.",
   },
