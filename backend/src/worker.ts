@@ -285,8 +285,19 @@ app.post('/api/auth/register', async (c) => {
       );
     }
 
-    if (!password || password.length < 8) {
-      return c.json({ success: false, error: 'Kata sandi minimal 8 karakter' }, 400);
+    const hasUpper = /[A-Z]/.test(password);
+    const hasLower = /[a-z]/.test(password);
+    const hasNumber = /[0-9]/.test(password);
+    const hasSpecial = /[^A-Za-z0-9]/.test(password);
+
+    if (!password || password.length < 8 || !hasUpper || !hasLower || !hasNumber || !hasSpecial) {
+      return c.json(
+        {
+          success: false,
+          error: 'Kata sandi minimal 8 karakter dan wajib memuat huruf besar, huruf kecil, angka, serta simbol khusus',
+        },
+        400
+      );
     }
 
     // 2. Cek duplikasi email atau username
