@@ -17,6 +17,7 @@ import {
   FileText,
   BookOpen,
   Share2,
+  Sparkles,
 } from 'lucide-react';
 
 interface FrameworkGuide {
@@ -38,6 +39,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   defer
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
+  data-auto-capture="true"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
     note: 'Sisipkan di dalam tag <head> pada index.html. Otomatis mendukung localhost:5173.',
@@ -53,6 +55,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   defer
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
+  data-auto-capture="true"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js"
   strategy="afterInteractive"
 />`,
@@ -67,6 +70,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   defer
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
+  data-auto-capture="true"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
     note: 'Sisipkan sebelum </head> atau sebelum </body> (mendukung WordPress, Shopify, Webflow, PHP).',
@@ -80,6 +84,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   defer
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
+  data-auto-capture="true"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
     note: 'Untuk Nuxt 3, tambahkan script ke app.head.script di nuxt.config.ts. Untuk Vue Vite, sisipkan di index.html.',
@@ -93,6 +98,7 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   defer
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
+  data-auto-capture="true"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js"
 ></script>`,
     note: 'Sisipkan di dalam tag <head> pada berkas Layout.astro utama Anda.',
@@ -212,15 +218,48 @@ export default function DocsPage() {
         </div>
       </div>
 
-      {/* Langkah 2: Menandai Elemen */}
-      <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-4">
-        <h2 className="text-sm font-semibold text-zinc-900 flex items-center gap-2">
-          <span className="w-5 h-5 rounded-full bg-zinc-900 text-white flex items-center justify-center text-[10px] font-bold">2</span>
-          <span>Tandai Elemen atau Tombol yang Ingin Dilacak</span>
-        </h2>
-        <p className="text-xs text-zinc-600 leading-relaxed">
-          Tambahkan atribut <code className="px-1.5 py-0.5 bg-zinc-100 border border-zinc-200 rounded text-zinc-800 font-mono">data-track-cta=&quot;nama-tombol-unik&quot;</code> pada tombol, link kontak, atau form submit mana pun di HTML/JSX Anda. Script ClickTracker menggunakan <em>Global Event Delegation</em> sehingga tidak memerlukan setup listener tambahan:
-        </p>
+      {/* Langkah 2: Menandai Elemen & Smart Auto-Capture */}
+      <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-zinc-900 flex items-center gap-2">
+            <span className="w-5 h-5 rounded-full bg-zinc-900 text-white flex items-center justify-center text-[10px] font-bold">2</span>
+            <span>Pelacakan Klik: Mode Otomatis vs Kustom</span>
+          </h2>
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-800 text-xs font-semibold border border-zinc-200">
+            <Sparkles className="w-3.5 h-3.5 text-zinc-600" />
+            <span>Mendukung Smart Auto-Capture</span>
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="p-4 rounded-lg bg-zinc-50 border border-zinc-200 space-y-2">
+            <div className="text-xs font-bold text-zinc-900 flex items-center gap-1.5">
+              <span>Mode 1: Smart Auto-Capture (Tanpa Koding Tambahan)</span>
+            </div>
+            <p className="text-xs text-zinc-600 leading-relaxed">
+              Dengan atribut <code className="px-1.5 py-0.5 bg-white border border-zinc-200 rounded font-mono text-zinc-800">data-auto-capture=&quot;true&quot;</code>, script akan otomatis:
+            </p>
+            <ul className="text-xs text-zinc-600 space-y-1 list-disc list-inside">
+              <li>Mendeteksi teks tombol (misal <em>&quot;Explore&quot;</em> atau <em>&quot;Beli&quot;</em>) digabung dengan judul kartu produk (<code className="font-mono text-[11px]">812-explore</code>).</li>
+              <li>Mendeteksi logo brand mobil dari tag gambar (<code className="font-mono text-[11px]">&lt;img alt=&quot;Ferrari&quot;&gt;</code> $\rightarrow$ <code className="font-mono text-[11px]">brand-ferrari</code>).</li>
+              <li>Pengecualian: tambahkan atribut <code className="font-mono text-[11px]">data-track-ignore</code> pada elemen yang ingin diabaikan.</li>
+            </ul>
+          </div>
+
+          <div className="p-4 rounded-lg bg-zinc-50 border border-zinc-200 space-y-2">
+            <div className="text-xs font-bold text-zinc-900 flex items-center gap-1.5">
+              <span>Mode 2: Kustomisasi Manual (Opsional)</span>
+            </div>
+            <p className="text-xs text-zinc-600 leading-relaxed">
+              Jika Anda ingin memberi nama event spesifik secara manual, cukup sematkan atribut <code className="px-1.5 py-0.5 bg-white border border-zinc-200 rounded font-mono text-zinc-800">data-track-cta=&quot;nama-event&quot;</code>. Mode manual memiliki prioritas tertinggi di atas auto-capture.
+            </p>
+            <pre className="p-2.5 rounded-md bg-zinc-900 text-[11px] font-mono text-zinc-200 overflow-x-auto">
+{`<button data-track-cta="btn-custom-event">
+  Aksi Khusus
+</button>`}
+            </pre>
+          </div>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
           {/* Card Contoh 1 */}

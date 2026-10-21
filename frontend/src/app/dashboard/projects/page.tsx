@@ -18,6 +18,7 @@ import {
   X,
   AlertTriangle,
   Loader2,
+  Sparkles,
 } from "lucide-react";
 
 interface ProjectData {
@@ -46,6 +47,7 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
+  data-auto-capture="true"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
     note: "Sisipkan di dalam tag <head> pada index.html. Otomatis mendukung localhost:5173.",
@@ -60,6 +62,7 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
+  data-auto-capture="true"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js"
   strategy="afterInteractive"
 />`,
@@ -73,6 +76,7 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
+  data-auto-capture="true"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
     note: "Sisipkan sebelum </head> atau sebelum </body> (mendukung WordPress, Webflow, Shopify, Laravel).",
@@ -85,6 +89,7 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
+  data-auto-capture="true"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
     note: "Untuk Nuxt 3, sisipkan konfigurasi script di properti app.head.script pada nuxt.config.ts.",
@@ -97,6 +102,7 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
+  data-auto-capture="true"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js"
 ></script>`,
     note: "Sisipkan di dalam tag <head> pada berkas Layout.astro utama Anda.",
@@ -593,40 +599,36 @@ export default function ProjectsPage() {
           </button>
         </div>
 
-        {/* Panduan Menandai Tombol */}
-        <div className="rounded-xl bg-zinc-50 border border-zinc-200 p-4 text-xs text-zinc-600 space-y-2">
-          <div className="font-semibold text-zinc-900 flex items-center gap-1.5">
-            <HelpCircle className="w-4 h-4 text-zinc-500" />
-            <span>Langkah 2: Tandai Tombol yang Ingin Dihitung Kliknya</span>
+        {/* Panduan Menandai Tombol & Smart Auto-Capture */}
+        <div className="rounded-xl bg-zinc-50 border border-zinc-200 p-4 text-xs text-zinc-600 space-y-3">
+          <div className="font-semibold text-zinc-900 flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <HelpCircle className="w-4 h-4 text-zinc-500" />
+              <span>Langkah 2: Pelacakan Klik Tombol &amp; Logo Brand</span>
+            </div>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-zinc-200/80 text-zinc-800 text-[10px] font-semibold">
+              <Sparkles className="w-3 h-3 text-zinc-600" />
+              Smart Auto-Capture
+            </span>
           </div>
-          <p className="text-zinc-500">
-            Tambahkan atribut{" "}
-            <code className="text-zinc-900 font-mono font-semibold bg-zinc-200 px-1 py-0.5 rounded">
-              data-track-cta="nama_tombol"
-            </code>{" "}
-            pada tombol, link WhatsApp, atau form di website Anda:
-          </p>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-            <div className="p-2.5 rounded-lg bg-white border border-zinc-200">
-              <span className="text-[11px] text-zinc-400 block mb-1">
-                Contoh Link WhatsApp:
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+            <div className="p-3 rounded-lg bg-white border border-zinc-200 space-y-1.5">
+              <span className="text-[11px] font-bold text-zinc-900 block flex items-center gap-1">
+                <span>1. Mode Otomatis (Smart Auto-Capture)</span>
               </span>
-              <code className="text-zinc-800 font-mono text-[11px] block overflow-x-auto">
-                &lt;a href=&quot;https://wa.me/...&quot;
-                data-track-cta=&quot;btn-whatsapp&quot;&gt;Chat
-                WhatsApp&lt;/a&gt;
-              </code>
+              <p className="text-[11px] text-zinc-500 leading-relaxed">
+                Tanpa perlu koding manual. Tombol (seperti <em>&quot;Explore&quot;</em>, <em>&quot;Detail&quot;</em>) otomatis dikombinasikan dengan judul kartu produk (contoh: <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">812-explore</code>), dan logo brand mobil (dari tag <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">alt=&quot;Ferrari&quot;</code>) langsung tercatat sebagai <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">brand-ferrari</code>.
+              </p>
             </div>
 
-            <div className="p-2.5 rounded-lg bg-white border border-zinc-200">
-              <span className="text-[11px] text-zinc-400 block mb-1">
-                Contoh Tombol Checkout:
+            <div className="p-3 rounded-lg bg-white border border-zinc-200 space-y-1.5">
+              <span className="text-[11px] font-bold text-zinc-900 block">
+                2. Mode Manual / Kustom (Opsional)
               </span>
-              <code className="text-zinc-800 font-mono text-[11px] block overflow-x-auto">
-                &lt;button data-track-cta=&quot;btn-checkout&quot;&gt;Beli
-                Sekarang&lt;/button&gt;
-              </code>
+              <p className="text-[11px] text-zinc-500 leading-relaxed">
+                Jika ingin nama event spesifik, tambahkan atribut manual <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">data-track-cta=&quot;nama_tombol&quot;</code> pada elemen. Gunakan <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">data-track-ignore</code> untuk mengabaikan klik tombol tertentu.
+              </p>
             </div>
           </div>
         </div>
