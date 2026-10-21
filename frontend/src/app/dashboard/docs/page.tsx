@@ -33,114 +33,69 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
     id: 'vite',
     name: 'React + Vite',
     badge: 'Paling Populer',
-    fileTarget: 'index.html (di folder root)',
-    codeSnippet: `<!-- index.html -->
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Website Saya</title>
-
-    <!-- ClickTracker Universal Script -->
-    <script
-      defer
-      data-project-id="PROJECT_ID_ANDA"
-      data-write-key="WRITE_KEY_ANDA"
-      src="https://traffic-analytics-taupe.vercel.app/tracker.js">
-    </script>
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>`,
-    note: 'Otomatis mendukung localhost port 5173 saat dijalankan dengan npm run dev.',
+    fileTarget: 'index.html (di dalam tag <head>)',
+    codeSnippet: `<script
+  defer
+  data-project-id="PROJECT_ID_ANDA"
+  data-write-key="WRITE_KEY_ANDA"
+  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+</script>`,
+    note: 'Sisipkan di dalam tag <head> pada index.html. Otomatis mendukung localhost:5173.',
   },
   {
     id: 'next-app',
     name: 'Next.js (App Router)',
     badge: 'Next.js 13/14/15/16',
     fileTarget: 'src/app/layout.tsx atau app/layout.tsx',
-    codeSnippet: `// app/layout.tsx
-import Script from 'next/script';
+    codeSnippet: `import Script from 'next/script';
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="id">
-      <head>
-        <Script
-          defer
-          data-project-id="PROJECT_ID_ANDA"
-          data-write-key="WRITE_KEY_ANDA"
-          src="https://traffic-analytics-taupe.vercel.app/tracker.js"
-          strategy="afterInteractive"
-        />
-      </head>
-      <body>{children}</body>
-    </html>
-  );
-}`,
-    note: 'Gunakan strategy="afterInteractive" agar tidak membebani First Contentful Paint (FCP).',
+<Script
+  defer
+  data-project-id="PROJECT_ID_ANDA"
+  data-write-key="WRITE_KEY_ANDA"
+  src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+  strategy="afterInteractive"
+/>`,
+    note: 'Sisipkan di dalam RootLayout. strategy="afterInteractive" menjaga kecepatan First Contentful Paint.',
   },
   {
     id: 'html',
     name: 'HTML / PHP / WordPress / Shopify',
     badge: 'Universal',
     fileTarget: 'index.html / header.php / footer.php',
-    codeSnippet: `<!-- Sisipkan sebelum </head> atau sebelum </body> -->
-<script
+    codeSnippet: `<script
   defer
   data-project-id="PROJECT_ID_ANDA"
   data-write-key="WRITE_KEY_ANDA"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
-    note: 'Bisa digunakan di CMS apa pun (WordPress, Webflow, Blogger, Shopify, Laravel Blade).',
+    note: 'Sisipkan sebelum </head> atau sebelum </body> (mendukung WordPress, Shopify, Webflow, PHP).',
   },
   {
     id: 'vue',
     name: 'Vue.js / Nuxt',
     badge: 'Vue 3 & Nuxt 3',
     fileTarget: 'index.html (Vue) atau nuxt.config.ts (Nuxt)',
-    codeSnippet: `// nuxt.config.ts
-export default defineNuxtConfig({
-  app: {
-    head: {
-      script: [
-        {
-          defer: true,
-          'data-project-id': 'PROJECT_ID_ANDA',
-          'data-write-key': 'WRITE_KEY_ANDA',
-          src: 'https://traffic-analytics-taupe.vercel.app/tracker.js',
-        },
-      ],
-    },
-  },
-});`,
-    note: 'Untuk Vue polos berbasis Vite, gunakan cara yang sama persis dengan React Vite di index.html.',
+    codeSnippet: `<script
+  defer
+  data-project-id="PROJECT_ID_ANDA"
+  data-write-key="WRITE_KEY_ANDA"
+  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+</script>`,
+    note: 'Untuk Nuxt 3, tambahkan script ke app.head.script di nuxt.config.ts. Untuk Vue Vite, sisipkan di index.html.',
   },
   {
     id: 'astro',
     name: 'Astro',
     badge: 'Astro Islands',
-    fileTarget: 'src/layouts/Layout.astro',
-    codeSnippet: `---
-// src/layouts/Layout.astro
----
-<!doctype html>
-<html lang="id">
-  <head>
-    <meta charset="UTF-8" />
-    <script
-      defer
-      data-project-id="PROJECT_ID_ANDA"
-      data-write-key="WRITE_KEY_ANDA"
-      src="https://traffic-analytics-taupe.vercel.app/tracker.js"
-    ></script>
-  </head>
-  <body>
-    <slot />
-  </body>
-</html>`,
-    note: 'Script berjalan otomatis di client-side tanpa memengaruhi static site generation.',
+    fileTarget: 'src/layouts/Layout.astro (di dalam <head>)',
+    codeSnippet: `<script
+  defer
+  data-project-id="PROJECT_ID_ANDA"
+  data-write-key="WRITE_KEY_ANDA"
+  src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+></script>`,
+    note: 'Sisipkan di dalam tag <head> pada berkas Layout.astro utama Anda.',
   },
 ];
 

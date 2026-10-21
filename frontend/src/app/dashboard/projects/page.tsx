@@ -41,111 +41,65 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   {
     id: "vite",
     name: "React (Vite)",
-    fileTarget: "index.html (di folder root)",
-    getCode: (pid, key) => `<!-- index.html -->
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Website Saya</title>
-
-    <!-- ClickTracker Script -->
-    <script
-      defer
-      data-project-id="${pid}"
-      data-write-key="${key}"
-      src="https://traffic-analytics-taupe.vercel.app/tracker.js">
-    </script>
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>`,
-    note: "Otomatis mendukung localhost:5173 saat pengujian lokal.",
-  },
-  {
-    id: "next-app",
-    name: "Next.js (App Router)",
-    fileTarget: "app/layout.tsx atau src/app/layout.tsx",
-    getCode: (pid, key) => `// app/layout.tsx
-import Script from 'next/script';
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="id">
-      <head>
-        <Script
-          defer
-          data-project-id="${pid}"
-          data-write-key="${key}"
-          src="https://traffic-analytics-taupe.vercel.app/tracker.js"
-          strategy="afterInteractive"
-        />
-      </head>
-      <body>{children}</body>
-    </html>
-  );
-}`,
-    note: 'strategy="afterInteractive" memastikan kecepatan FCP website tidak terganggu.',
-  },
-  {
-    id: "html",
-    name: "HTML / PHP / WordPress",
-    fileTarget: "index.html / header.php / theme.liquid",
-    getCode: (
-      pid,
-      key,
-    ) => `<!-- Sisipkan sebelum </head> atau sebelum </body> -->
-<script
+    fileTarget: "index.html (di dalam tag <head>)",
+    getCode: (pid, key) => `<script
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
-    note: "Bisa ditempelkan di CMS apa pun (WordPress, Webflow, Blogger, Shopify, Laravel).",
+    note: "Sisipkan di dalam tag <head> pada index.html. Otomatis mendukung localhost:5173.",
+  },
+  {
+    id: "next-app",
+    name: "Next.js (App Router)",
+    fileTarget: "app/layout.tsx atau src/app/layout.tsx",
+    getCode: (pid, key) => `import Script from 'next/script';
+
+<Script
+  defer
+  data-project-id="${pid}"
+  data-write-key="${key}"
+  src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+  strategy="afterInteractive"
+/>`,
+    note: 'Sisipkan di dalam RootLayout. strategy="afterInteractive" menjaga kecepatan First Contentful Paint.',
+  },
+  {
+    id: "html",
+    name: "HTML / PHP / WordPress",
+    fileTarget: "index.html / header.php / footer.php",
+    getCode: (pid, key) => `<script
+  defer
+  data-project-id="${pid}"
+  data-write-key="${key}"
+  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+</script>`,
+    note: "Sisipkan sebelum </head> atau sebelum </body> (mendukung WordPress, Webflow, Shopify, Laravel).",
   },
   {
     id: "vue",
     name: "Vue / Nuxt 3",
     fileTarget: "index.html (Vue) atau nuxt.config.ts (Nuxt)",
-    getCode: (pid, key) => `// nuxt.config.ts
-export default defineNuxtConfig({
-  app: {
-    head: {
-      script: [
-        {
-          defer: true,
-          'data-project-id': '${pid}',
-          'data-write-key': '${key}',
-          src: 'https://traffic-analytics-taupe.vercel.app/tracker.js',
-        },
-      ],
-    },
-  },
-});`,
+    getCode: (pid, key) => `<script
+  defer
+  data-project-id="${pid}"
+  data-write-key="${key}"
+  src="https://traffic-analytics-taupe.vercel.app/tracker.js">
+</script>`,
+    note: "Untuk Nuxt 3, sisipkan konfigurasi script di properti app.head.script pada nuxt.config.ts.",
   },
   {
     id: "astro",
     name: "Astro",
-    fileTarget: "src/layouts/Layout.astro",
-    getCode: (pid, key) => `---
-// src/layouts/Layout.astro
----
-<!doctype html>
-<html lang="id">
-  <head>
-    <meta charset="UTF-8" />
-    <script
-      defer
-      data-project-id="${pid}"
-      data-write-key="${key}"
-      src="https://traffic-analytics-taupe.vercel.app/tracker.js"
-    ></script>
-  </head>
-  <body>
-    <slot />
-  </body>
-</html>`,
+    fileTarget: "src/layouts/Layout.astro (di dalam <head>)",
+    getCode: (pid, key) => `<script
+  defer
+  data-project-id="${pid}"
+  data-write-key="${key}"
+  src="https://traffic-analytics-taupe.vercel.app/tracker.js"
+></script>`,
+    note: "Sisipkan di dalam tag <head> pada berkas Layout.astro utama Anda.",
   },
 ];
 
