@@ -709,7 +709,7 @@ app.get('/api/track/events', async (c) => {
     const limit = isNaN(limitParam) ? 200 : Math.min(Math.max(limitParam, 1), 1000);
 
     const { results } = await c.env.DB.prepare(
-      `SELECT CAST(id AS TEXT) as id, project_id, element_id, page_path, session_id, user_id, user_agent, ip_address, created_at 
+      `SELECT CAST(id AS TEXT) as id, project_id, element_id, page_path, session_id, user_id, user_agent, ip_address, country, city, created_at 
        FROM click_events 
        WHERE project_id = ?
        ORDER BY created_at DESC 
@@ -799,19 +799,26 @@ app.post('/api/track/click', async (c) => {
       const anonymized = anonymizeIp(rawIp);
       const userAgent = c.req.header('user-agent') || null;
 
+      // Ekstraksi data geolokasi otomatis dari Cloudflare Edge (Legal & UU PDP / GDPR Compliant)
+      const cf = (c.req.raw as any)?.cf || {};
+      const country = String(cf.country || c.req.header('cf-ipcountry') || 'ID').toUpperCase().slice(0, 8);
+      const city = String(cf.city || c.req.header('cf-ipcity') || 'Unknown').slice(0, 64);
+
       // Atomic batch statement D1
       await c.env.DB.batch([
         c.env.DB.prepare(
           `INSERT INTO click_events (
-            project_id, element_id, page_path, session_id, user_id, user_agent, ip_address, created_at
-          ) VALUES (?, ?, ?, ?, NULL, ?, ?, datetime('now'));`
+            project_id, element_id, page_path, session_id, user_id, user_agent, ip_address, country, city, created_at
+          ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, datetime('now'));`
         ).bind(
           projectId,
           String(elementId).slice(0, 100),
           String(pagePath).slice(0, 255),
           String(sessionId).slice(0, 100),
           userAgent,
-          anonymized
+          anonymized,
+          country,
+          city
         ),
         c.env.DB.prepare(
           `INSERT INTO cta_metrics (project_id, element_id, page_path, total_clicks, last_clicked_at)

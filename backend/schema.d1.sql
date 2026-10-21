@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS click_events (
     user_id INTEGER,
     user_agent TEXT,
     ip_address TEXT NOT NULL,
+    country TEXT DEFAULT 'ID',
+    city TEXT DEFAULT 'Unknown',
     created_at TEXT DEFAULT (datetime('now')) NOT NULL,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );

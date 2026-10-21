@@ -24,6 +24,7 @@ import {
   CheckCircle2,
   AlertCircle,
   MousePointerClick,
+  MapPin,
 } from 'lucide-react';
 
 ChartJS.register(
@@ -56,6 +57,8 @@ export interface ClickEventRow {
   user_id: number | null;
   user_agent: string | null;
   ip_address: string;
+  country?: string;
+  city?: string;
   created_at: string;
 }
 
@@ -431,6 +434,19 @@ export default function AnalyticsChartJsDemo({
 
     const isHealthy = Number(sessionRatio) <= 3.0;
 
+    // Hitung konsentrasi geolokasi pengunjung
+    const cityCounts: Record<string, number> = {};
+    events.forEach((ev) => {
+      const city = ev.city && ev.city !== 'Unknown' ? ev.city : null;
+      if (city) {
+        cityCounts[city] = (cityCounts[city] || 0) + 1;
+      }
+    });
+    const topCities = Object.entries(cityCounts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
+
     return {
       ctaTitle,
       ctaDesc,
@@ -439,6 +455,7 @@ export default function AnalyticsChartJsDemo({
       uniqueSessions,
       sessionRatio,
       isHealthy,
+      topCities,
     };
   }, [sortedCtaList, totalClicks, events, deviceStats]);
 
@@ -635,6 +652,20 @@ export default function AnalyticsChartJsDemo({
                 <span className="text-zinc-600">{dynamicInsights.devDesc}</span>
               </div>
             </div>
+
+            {dynamicInsights.topCities && dynamicInsights.topCities.length > 0 && (
+              <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 flex items-start gap-2.5">
+                <MapPin className="w-4 h-4 text-zinc-700 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-zinc-900 block font-semibold">
+                    Konsentrasi Wilayah Pengunjung
+                  </strong>
+                  <span className="text-zinc-600">
+                    Interaksi klik terdeteksi berasal dari {dynamicInsights.topCities.map((c: any) => `${c.name} (${c.count} klik)`).join(', ')}.
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="pt-2 border-t border-zinc-100 flex items-center justify-between text-[11px] text-zinc-500">

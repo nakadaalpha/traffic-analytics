@@ -13,6 +13,7 @@ import {
   Monitor,
   Smartphone,
   Tablet,
+  MapPin,
 } from 'lucide-react';
 
 interface ClickEventRow {
@@ -24,6 +25,8 @@ interface ClickEventRow {
   user_id: number | null;
   user_agent: string | null;
   ip_address: string;
+  country?: string;
+  city?: string;
   created_at: string;
 }
 
@@ -210,6 +213,7 @@ export default function EventsPage() {
                   <th className="px-5 py-3 font-semibold">Path Halaman</th>
                   <th className="px-5 py-3 font-semibold">Perangkat</th>
                   <th className="px-5 py-3 font-semibold">Browser</th>
+                  <th className="px-5 py-3 font-semibold">Lokasi (Edge Geo)</th>
                   <th className="px-5 py-3 font-semibold">IP Address (Masked)</th>
                   <th className="px-5 py-3 font-semibold">Session ID</th>
                   <th className="px-5 py-3 font-semibold text-right">Waktu (WIB)</th>
@@ -242,6 +246,16 @@ export default function EventsPage() {
                       <td className="px-5 py-3.5">
                         <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-zinc-50 border border-zinc-200 text-zinc-700 text-[11px] font-mono">
                           {dev.browser}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3.5">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-zinc-50 border border-zinc-200 text-zinc-800 text-[11px] font-medium font-mono">
+                          <MapPin className="w-3.5 h-3.5 text-zinc-500" />
+                          <span>
+                            {evt.city && evt.city !== 'Unknown'
+                              ? `${evt.city}, ${evt.country || 'ID'}`
+                              : (evt.country || 'Indonesia (ID)')}
+                          </span>
                         </span>
                       </td>
                       <td className="px-5 py-3.5">
