@@ -80,7 +80,7 @@ function getCtaBrandColor(elementId: string): { bg: string; hover: string; label
     return { bg: '#EA4335', hover: '#c5221f', label: 'Gmail' };
   }
   if (lower.includes('instagram') || lower.includes('ig')) {
-    return { bg: '#E1306C', hover: '#c1275b', label: 'Instagram' };
+    return { bg: '#C13584', hover: '#a82c71', label: 'Instagram' };
   }
   if (lower.includes('linkedin')) {
     return { bg: '#0077B5', hover: '#005f93', label: 'LinkedIn' };

@@ -126,15 +126,15 @@ function getCtaBadgeStyle(elementId: string) {
   }
   if (lower.includes('gmail') || lower.includes('email') || lower.includes('mailto')) {
     return {
-      pill: 'bg-red-50/80 border-red-200 text-red-900',
-      dot: 'bg-red-500',
+      pill: 'bg-red-50/80 border-red-200 text-red-800',
+      dot: 'bg-red-600',
       tag: 'Gmail',
     };
   }
   if (lower.includes('instagram') || lower.includes('ig')) {
     return {
-      pill: 'bg-rose-50/80 border-rose-200 text-rose-900',
-      dot: 'bg-rose-500',
+      pill: 'bg-fuchsia-50/80 border-fuchsia-200 text-fuchsia-900',
+      dot: 'bg-fuchsia-600',
       tag: 'Instagram',
     };
   }
