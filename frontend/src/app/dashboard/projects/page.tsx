@@ -19,6 +19,7 @@ import {
   AlertTriangle,
   Loader2,
   Sparkles,
+  SlidersHorizontal,
 } from "lucide-react";
 
 interface ProjectData {
@@ -34,7 +35,7 @@ interface FrameworkSnippet {
   id: string;
   name: string;
   fileTarget: string;
-  getCode: (projectId: string, writeKey: string) => string;
+  getCode: (projectId: string, writeKey: string, isAutoCapture: boolean) => string;
   note?: string;
 }
 
@@ -43,11 +44,11 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
     id: "vite",
     name: "React (Vite)",
     fileTarget: "index.html (di dalam tag <head>)",
-    getCode: (pid, key) => `<script
+    getCode: (pid, key, auto) => `<script
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
-  data-auto-capture="true"
+  data-auto-capture="${auto ? 'true' : 'false'}"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
     note: "Sisipkan di dalam tag <head> pada index.html. Otomatis mendukung localhost:5173.",
@@ -56,13 +57,13 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
     id: "next-app",
     name: "Next.js (App Router)",
     fileTarget: "app/layout.tsx atau src/app/layout.tsx",
-    getCode: (pid, key) => `import Script from 'next/script';
+    getCode: (pid, key, auto) => `import Script from 'next/script';
 
 <Script
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
-  data-auto-capture="true"
+  data-auto-capture="${auto ? 'true' : 'false'}"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js"
   strategy="afterInteractive"
 />`,
@@ -72,11 +73,11 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
     id: "html",
     name: "HTML / PHP / WordPress",
     fileTarget: "index.html / header.php / footer.php",
-    getCode: (pid, key) => `<script
+    getCode: (pid, key, auto) => `<script
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
-  data-auto-capture="true"
+  data-auto-capture="${auto ? 'true' : 'false'}"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
     note: "Sisipkan sebelum </head> atau sebelum </body> (mendukung WordPress, Webflow, Shopify, Laravel).",
@@ -85,11 +86,11 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
     id: "vue",
     name: "Vue / Nuxt 3",
     fileTarget: "index.html (Vue) atau nuxt.config.ts (Nuxt)",
-    getCode: (pid, key) => `<script
+    getCode: (pid, key, auto) => `<script
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
-  data-auto-capture="true"
+  data-auto-capture="${auto ? 'true' : 'false'}"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js">
 </script>`,
     note: "Untuk Nuxt 3, sisipkan konfigurasi script di properti app.head.script pada nuxt.config.ts.",
@@ -98,11 +99,11 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
     id: "astro",
     name: "Astro",
     fileTarget: "src/layouts/Layout.astro (di dalam <head>)",
-    getCode: (pid, key) => `<script
+    getCode: (pid, key, auto) => `<script
   defer
   data-project-id="${pid}"
   data-write-key="${key}"
-  data-auto-capture="true"
+  data-auto-capture="${auto ? 'true' : 'false'}"
   src="https://traffic-analytics-taupe.vercel.app/tracker.js"
 ></script>`,
     note: "Sisipkan di dalam tag <head> pada berkas Layout.astro utama Anda.",
@@ -119,6 +120,7 @@ export default function ProjectsPage() {
   const [selectedFramework, setSelectedFramework] = useState(
     FRAMEWORK_SNIPPETS[0].id,
   );
+  const [trackingMode, setTrackingMode] = useState<"smart" | "manual">("smart");
 
   // Form State untuk Tambah Project Baru
   const [projectName, setProjectName] = useState("");
@@ -307,7 +309,11 @@ export default function ProjectsPage() {
     FRAMEWORK_SNIPPETS[0];
   const currentPid = selectedProject?.id || "PROJECT_ID_ANDA";
   const currentKey = selectedProject?.writeKey || "WRITE_KEY_ANDA";
-  const displayCode = activeSnippet.getCode(currentPid, currentKey);
+  const displayCode = activeSnippet.getCode(
+    currentPid,
+    currentKey,
+    trackingMode === "smart"
+  );
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(displayCode);
@@ -559,6 +565,51 @@ export default function ProjectsPage() {
           ))}
         </div>
 
+        {/* Pilihan Mode Pelacakan: Smart Auto-Capture vs Manual Selektif */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-zinc-50 border border-zinc-200 rounded-xl">
+          <div className="space-y-0.5">
+            <span className="text-xs font-bold text-zinc-900 flex items-center gap-1.5">
+              <span>Pilih Mode Pelacakan Script</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-700">
+                {trackingMode === 'smart' ? 'data-auto-capture="true"' : 'data-auto-capture="false"'}
+              </span>
+            </span>
+            <p className="text-[11px] text-zinc-500">
+              {trackingMode === 'smart' 
+                ? 'Mode Smart: Otomatis mendeteksi klik tombol aksi dan logo brand tanpa koding manual.' 
+                : 'Mode Manual: Hanya tombol yang secara spesifik diberi atribut data-track-cta yang akan dihitung.'}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-1 bg-white border border-zinc-200 p-1 rounded-lg shrink-0">
+            <button
+              type="button"
+              onClick={() => setTrackingMode('smart')}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                trackingMode === 'smart'
+                  ? 'bg-zinc-900 text-white shadow-sm'
+                  : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Smart (Otomatis)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setTrackingMode('manual')}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                trackingMode === 'manual'
+                  ? 'bg-zinc-900 text-white shadow-sm'
+                  : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100'
+              }`}
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <span>Manual (Selektif)</span>
+            </button>
+          </div>
+        </div>
+
         {/* Lokasi File Target */}
         <div className="flex items-center justify-between text-xs text-zinc-600">
           <div className="flex items-center gap-2">
@@ -606,29 +657,59 @@ export default function ProjectsPage() {
               <HelpCircle className="w-4 h-4 text-zinc-500" />
               <span>Langkah 2: Pelacakan Klik Tombol &amp; Logo Brand</span>
             </div>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-zinc-200/80 text-zinc-800 text-[10px] font-semibold">
-              <Sparkles className="w-3 h-3 text-zinc-600" />
-              Smart Auto-Capture
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-zinc-200/80 text-zinc-800 text-[10px] font-semibold font-mono">
+              Mode Aktif: {trackingMode === 'smart' ? 'Smart Auto-Capture' : 'Manual Selektif'}
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-            <div className="p-3 rounded-lg bg-white border border-zinc-200 space-y-1.5">
-              <span className="text-[11px] font-bold text-zinc-900 block flex items-center gap-1">
-                <span>1. Mode Otomatis (Smart Auto-Capture)</span>
-              </span>
+            <div
+              className={`p-3.5 rounded-lg border transition-all ${
+                trackingMode === 'smart'
+                  ? 'bg-white border-zinc-900 ring-1 ring-zinc-900 shadow-sm'
+                  : 'bg-white/60 border-zinc-200 opacity-60'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] font-bold text-zinc-900 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-zinc-700" />
+                  <span>1. Mode Otomatis (Smart Auto-Capture)</span>
+                </span>
+                {trackingMode === 'smart' && (
+                  <span className="text-[10px] bg-zinc-900 text-white px-1.5 py-0.5 rounded font-medium">
+                    Aktif
+                  </span>
+                )}
+              </div>
               <p className="text-[11px] text-zinc-500 leading-relaxed">
                 Tanpa perlu koding manual. Tombol (seperti <em>&quot;Explore&quot;</em>, <em>&quot;Detail&quot;</em>) otomatis dikombinasikan dengan judul kartu produk (contoh: <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">812-explore</code>), dan logo brand mobil (dari tag <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">alt=&quot;Ferrari&quot;</code>) langsung tercatat sebagai <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">brand-ferrari</code>.
               </p>
             </div>
 
-            <div className="p-3 rounded-lg bg-white border border-zinc-200 space-y-1.5">
-              <span className="text-[11px] font-bold text-zinc-900 block">
-                2. Mode Manual / Kustom (Opsional)
-              </span>
-              <p className="text-[11px] text-zinc-500 leading-relaxed">
-                Jika ingin nama event spesifik, tambahkan atribut manual <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">data-track-cta=&quot;nama_tombol&quot;</code> pada elemen. Gunakan <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">data-track-ignore</code> untuk mengabaikan klik tombol tertentu.
+            <div
+              className={`p-3.5 rounded-lg border transition-all ${
+                trackingMode === 'manual'
+                  ? 'bg-white border-zinc-900 ring-1 ring-zinc-900 shadow-sm'
+                  : 'bg-white/60 border-zinc-200 opacity-60'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] font-bold text-zinc-900 flex items-center gap-1.5">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-zinc-700" />
+                  <span>2. Mode Manual (Presisi Selektif)</span>
+                </span>
+                {trackingMode === 'manual' && (
+                  <span className="text-[10px] bg-zinc-900 text-white px-1.5 py-0.5 rounded font-medium">
+                    Aktif
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-zinc-500 leading-relaxed mb-2">
+                Hanya elemen bertanda khusus yang dilacak. Tambahkan atribut <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">data-track-cta=&quot;nama_tombol&quot;</code> pada tombol Anda:
               </p>
+              <code className="text-zinc-800 font-mono text-[11px] block bg-zinc-100 p-2 rounded border border-zinc-200 overflow-x-auto">
+                &lt;button data-track-cta=&quot;btn-checkout&quot;&gt;Beli Sekarang&lt;/button&gt;
+              </code>
             </div>
           </div>
         </div>
