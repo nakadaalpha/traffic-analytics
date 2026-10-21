@@ -124,6 +124,13 @@ function getCtaBadgeStyle(elementId: string) {
       tag: 'WhatsApp',
     };
   }
+  if (lower.includes('gmail') || lower.includes('email') || lower.includes('mailto')) {
+    return {
+      pill: 'bg-red-50/80 border-red-200 text-red-900',
+      dot: 'bg-red-500',
+      tag: 'Gmail',
+    };
+  }
   if (lower.includes('instagram') || lower.includes('ig')) {
     return {
       pill: 'bg-rose-50/80 border-rose-200 text-rose-900',

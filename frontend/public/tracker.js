@@ -114,9 +114,23 @@
       }
     }
 
-    // 3. Cek atribut fallback seperti aria-label atau title
+    // 3. Cek atribut fallback seperti aria-label, title, atau tautan href (mailto / sosmed)
     if (!actionText) {
       actionText = clickable.getAttribute('aria-label') || clickable.getAttribute('title') || '';
+    }
+    if (!actionText && clickable.tagName === 'A') {
+      var href = clickable.getAttribute('href') || '';
+      if (href.startsWith('mailto:')) {
+        actionText = 'email';
+      } else if (href.includes('instagram.com')) {
+        actionText = 'instagram';
+      } else if (href.includes('wa.me') || href.includes('whatsapp.com')) {
+        actionText = 'whatsapp';
+      } else if (href.includes('github.com')) {
+        actionText = 'github';
+      } else if (href.includes('linkedin.com')) {
+        actionText = 'linkedin';
+      }
     }
 
     // 4. Ekstrak konteks produk / item terdekat (misal kartu mobil)

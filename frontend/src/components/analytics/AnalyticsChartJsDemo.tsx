@@ -76,6 +76,9 @@ function getCtaBrandColor(elementId: string): { bg: string; hover: string; label
   if (lower.includes('whatsapp') || lower.includes('wa')) {
     return { bg: '#25D366', hover: '#1ebe5d', label: 'WhatsApp' };
   }
+  if (lower.includes('gmail') || lower.includes('email') || lower.includes('mailto')) {
+    return { bg: '#EA4335', hover: '#c5221f', label: 'Gmail' };
+  }
   if (lower.includes('instagram') || lower.includes('ig')) {
     return { bg: '#E1306C', hover: '#c1275b', label: 'Instagram' };
   }
