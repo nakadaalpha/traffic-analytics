@@ -1,5 +1,6 @@
 import React from 'react';
 import MetricsLiveTable from '@/components/analytics/MetricsLiveTable';
+import AnalyticsChartJsDemo from '@/components/analytics/AnalyticsChartJsDemo';
 import Link from 'next/link';
 import { BarChart3, ArrowLeft, Plus, CheckCircle2, ShieldCheck, Zap, Database } from 'lucide-react';
 
@@ -86,6 +87,9 @@ export default function DashboardOverviewPage() {
           <div className="text-[11px] text-zinc-500 pt-1">GDPR &amp; Standar UU PDP</div>
         </div>
       </div>
+
+      {/* Chart.js Analytics Visualization Section */}
+      <AnalyticsChartJsDemo />
 
       {/* Live Table Section */}
       <MetricsLiveTable />
