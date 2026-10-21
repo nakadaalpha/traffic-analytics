@@ -70,6 +70,39 @@ interface AnalyticsChartJsDemoProps {
   loading?: boolean;
 }
 
+// Helper deteksi warna brand resmi untuk CTA sosial media & platform
+function getCtaBrandColor(elementId: string): { bg: string; hover: string; label: string } {
+  const lower = elementId.toLowerCase();
+  if (lower.includes('whatsapp') || lower.includes('wa')) {
+    return { bg: '#25D366', hover: '#1ebe5d', label: 'WhatsApp' };
+  }
+  if (lower.includes('instagram') || lower.includes('ig')) {
+    return { bg: '#E1306C', hover: '#c1275b', label: 'Instagram' };
+  }
+  if (lower.includes('linkedin')) {
+    return { bg: '#0077B5', hover: '#005f93', label: 'LinkedIn' };
+  }
+  if (lower.includes('github') || lower.includes('git')) {
+    return { bg: '#24292E', hover: '#1b1f23', label: 'GitHub' };
+  }
+  if (lower.includes('youtube') || lower.includes('yt')) {
+    return { bg: '#EF4444', hover: '#dc2626', label: 'YouTube' };
+  }
+  if (lower.includes('twitter') || lower.includes('x.com')) {
+    return { bg: '#0F1419', hover: '#000000', label: 'X / Twitter' };
+  }
+  if (lower.includes('telegram') || lower.includes('t.me')) {
+    return { bg: '#229ED9', hover: '#1d8bc0', label: 'Telegram' };
+  }
+  if (lower.includes('facebook') || lower.includes('fb')) {
+    return { bg: '#1877F2', hover: '#1464cc', label: 'Facebook' };
+  }
+  if (lower.includes('tiktok')) {
+    return { bg: '#000000', hover: '#18181b', label: 'TikTok' };
+  }
+  return { bg: '#18181b', hover: '#27272a', label: '' };
+}
+
 export default function AnalyticsChartJsDemo({
   projectId = '',
   projectName = '',
@@ -112,14 +145,27 @@ export default function AnalyticsChartJsDemo({
       };
     }
 
-    const colors = ['#18181b', '#3f3f46', '#71717a', '#a1a1aa', '#d4d4d8'];
+    const backgroundColors = sortedCtaList.map((item, idx) => {
+      const brand = getCtaBrandColor(item.element_id);
+      if (brand.label) return brand.bg;
+      const zincs = ['#18181b', '#3f3f46', '#71717a', '#a1a1aa', '#d4d4d8'];
+      return zincs[idx % zincs.length];
+    });
+
+    const hoverColors = sortedCtaList.map((item) => {
+      const brand = getCtaBrandColor(item.element_id);
+      if (brand.label) return brand.hover;
+      return '#09090b';
+    });
+
     return {
       labels: sortedCtaList.map((item) => item.element_id),
       datasets: [
         {
           label: 'Jumlah Klik',
           data: sortedCtaList.map((item) => item.clicks),
-          backgroundColor: colors.slice(0, sortedCtaList.length),
+          backgroundColor: backgroundColors,
+          hoverBackgroundColor: hoverColors,
           borderRadius: 4,
           barPercentage: sortedCtaList.length === 1 ? 0.35 : 0.6,
         },
@@ -142,7 +188,12 @@ export default function AnalyticsChartJsDemo({
         cornerRadius: 8,
         displayColors: false,
         callbacks: {
-          label: (context: any) => `${context.parsed.x} total klik tercatat`,
+          label: (context: any) => {
+            const rawId = sortedCtaList[context.dataIndex]?.element_id || '';
+            const brand = getCtaBrandColor(rawId);
+            const tag = brand.label ? ` (${brand.label})` : '';
+            return ` ${context.parsed.x} total klik tercatat${tag}`;
+          },
         },
       },
     },
@@ -220,9 +271,9 @@ export default function AnalyticsChartJsDemo({
         {
           data: [deviceStats.mobilePct, deviceStats.desktopPct, deviceStats.tabletPct],
           backgroundColor: [
-            '#18181b', // zinc-900 (mobile)
-            '#71717a', // zinc-500 (desktop)
-            '#d4d4d8', // zinc-300 (tablet)
+            '#16a34a', // emerald-600 (mobile)
+            '#2563eb', // blue-600 (desktop)
+            '#9333ea', // purple-600 (tablet)
           ],
           borderColor: '#ffffff',
           borderWidth: 2,
@@ -571,22 +622,22 @@ export default function AnalyticsChartJsDemo({
           <div className="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-100 text-center">
             <div className="space-y-0.5">
               <div className="text-xs font-bold text-zinc-900">{deviceStats.mobilePct}%</div>
-              <div className="text-[10px] text-zinc-500 flex items-center justify-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-zinc-900" />
+              <div className="text-[10px] text-zinc-500 flex items-center justify-center gap-1 font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-600" />
                 <span>Mobile ({deviceStats.mobile})</span>
               </div>
             </div>
             <div className="space-y-0.5">
               <div className="text-xs font-bold text-zinc-900">{deviceStats.desktopPct}%</div>
-              <div className="text-[10px] text-zinc-500 flex items-center justify-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-zinc-500" />
+              <div className="text-[10px] text-zinc-500 flex items-center justify-center gap-1 font-medium">
+                <span className="w-2 h-2 rounded-full bg-blue-600" />
                 <span>Desktop ({deviceStats.desktop})</span>
               </div>
             </div>
             <div className="space-y-0.5">
               <div className="text-xs font-bold text-zinc-900">{deviceStats.tabletPct}%</div>
-              <div className="text-[10px] text-zinc-500 flex items-center justify-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-zinc-300" />
+              <div className="text-[10px] text-zinc-500 flex items-center justify-center gap-1 font-medium">
+                <span className="w-2 h-2 rounded-full bg-purple-600" />
                 <span>Tablet ({deviceStats.tablet})</span>
               </div>
             </div>
