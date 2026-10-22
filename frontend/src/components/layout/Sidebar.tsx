@@ -137,21 +137,6 @@ export function Sidebar() {
             <span>Test Click (Sidebar CTA)</span>
           </button> */}
         </div>
-
-        {/* System Info Footer */}
-        <div className="p-4 border-t border-zinc-200 bg-zinc-50/50 text-[11px] space-y-1.5 text-zinc-500">
-          <div className="flex items-center justify-between">
-            <span>Database</span>
-            <span className="font-mono text-zinc-700 font-semibold flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              Cloudflare D1
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>Runtime</span>
-            <span className="font-mono text-zinc-700 font-semibold">Edge Workers</span>
-          </div>
-        </div>
       </aside>
     </>
   );

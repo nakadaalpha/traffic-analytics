@@ -1,11 +1,18 @@
 (function () {
   'use strict';
 
-  // Dapatkan referensi elemen <script> tracker saat ini
+  // Dapatkan referensi elemen <script> tracker saat ini secara presisi
   var currentScript =
     document.currentScript ||
+    document.querySelector('script[data-project-id]') ||
+    document.querySelector('script[src*="tracker.js"]') ||
     (function () {
       var scripts = document.getElementsByTagName('script');
+      for (var i = scripts.length - 1; i >= 0; i--) {
+        if (scripts[i].getAttribute('data-project-id') || (scripts[i].src && scripts[i].src.indexOf('tracker.js') !== -1)) {
+          return scripts[i];
+        }
+      }
       return scripts[scripts.length - 1];
     })();
 

@@ -21,7 +21,12 @@ import {
   Sparkles,
   SlidersHorizontal,
   RotateCw,
+  Shield,
+  Lock,
+  Server,
+  ExternalLink,
 } from "lucide-react";
+import Link from "next/link";
 
 interface ProjectData {
   id: string;
@@ -30,6 +35,17 @@ interface ProjectData {
   allowedOrigins: string[];
   isActive: boolean;
   createdAt?: string;
+}
+
+interface ProjectApiKey {
+  id: string;
+  project_id: string;
+  key_prefix: string;
+  name: string;
+  scopes: string;
+  is_active: number | boolean;
+  created_at: string;
+  last_used_at?: string | null;
 }
 
 interface FrameworkSnippet {
@@ -305,6 +321,93 @@ export default function ProjectsPage() {
     }
   };
 
+  // State & Handlers: Secret API Keys (Headless API Access)
+  const [apiKeys, setApiKeys] = useState<ProjectApiKey[]>([]);
+  const [loadingKeys, setLoadingKeys] = useState(false);
+  const [isCreatingKey, setIsCreatingKey] = useState(false);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [showCreateKeyModal, setShowCreateKeyModal] = useState(false);
+  const [createdKeyData, setCreatedKeyData] = useState<{ id: string; name: string; rawKey: string; keyPrefix: string } | null>(null);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [deletingKeyId, setDeletingKeyId] = useState<string | null>(null);
+
+  const fetchApiKeys = useCallback(async (projId: string) => {
+    try {
+      setLoadingKeys(true);
+      const res = await fetch(`/api/track/projects/${projId}/keys`, {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setApiKeys(json.data || []);
+      } else {
+        setApiKeys([]);
+      }
+    } catch {
+      setApiKeys([]);
+    } finally {
+      setLoadingKeys(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedProject?.id) {
+      fetchApiKeys(selectedProject.id);
+    } else {
+      setApiKeys([]);
+    }
+  }, [selectedProject?.id, fetchApiKeys]);
+
+  const handleCreateApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProject) return;
+    try {
+      setIsCreatingKey(true);
+      const res = await fetch(`/api/track/projects/${selectedProject.id}/keys`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: newKeyName.trim() || "Secret Key" }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setCreatedKeyData(json.key);
+        setShowCreateKeyModal(false);
+        setNewKeyName("");
+        await fetchApiKeys(selectedProject.id);
+      } else {
+        setMessage({ type: "error", text: json.error || "Gagal membuat Secret Key" });
+      }
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message || "Gagal menghubungi server" });
+    } finally {
+      setIsCreatingKey(false);
+    }
+  };
+
+  const handleDeleteApiKey = async (keyId: string) => {
+    if (!selectedProject) return;
+    try {
+      setDeletingKeyId(keyId);
+      const res = await fetch(`/api/track/projects/${selectedProject.id}/keys/${keyId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setMessage({ type: "success", text: "Secret API Key berhasil dicabut/dihapus." });
+        await fetchApiKeys(selectedProject.id);
+      } else {
+        setMessage({ type: "error", text: json.error || "Gagal menghapus API Key" });
+      }
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message || "Gagal menghubungi server" });
+    } finally {
+      setDeletingKeyId(null);
+    }
+  };
+
   const activeSnippet =
     FRAMEWORK_SNIPPETS.find((f) => f.id === selectedFramework) ||
     FRAMEWORK_SNIPPETS[0];
@@ -534,6 +637,112 @@ export default function ProjectsPage() {
           </div>
         )}
       </div>
+
+      {/* Secret API Keys Card (Headless Data Export / Read API) */}
+      {selectedProject && (
+        <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-zinc-900 text-white flex items-center justify-center">
+                  <Lock className="w-3.5 h-3.5" />
+                </div>
+                <h2 className="text-sm font-bold text-zinc-900">
+                  Secret API Key (Konsumsi Data Eksternal)
+                </h2>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 font-semibold font-mono">
+                  Project: {selectedProject.id}
+                </span>
+              </div>
+              <p className="text-xs text-zinc-500">
+                Gunakan kunci ini pada server backend aplikasi Anda yang lain (Laravel, Node.js, Python, Flutter) untuk menarik metrik dan event secara terprogram.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Link
+                href="/dashboard/docs#api"
+                className="h-8 px-3 text-xs text-zinc-600 hover:text-zinc-900 bg-white border border-zinc-200 rounded-lg hover:bg-zinc-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <Server className="w-3.5 h-3.5 text-zinc-500" />
+                <span>Dokumentasi API</span>
+                <ExternalLink className="w-3 h-3 text-zinc-400" />
+              </Link>
+              <button
+                type="button"
+                onClick={() => setShowCreateKeyModal(true)}
+                className="h-8 px-3 text-xs bg-zinc-900 hover:bg-zinc-800 text-white font-medium rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Buat Secret Key</span>
+              </button>
+            </div>
+          </div>
+
+          {loadingKeys ? (
+            <div className="p-4 text-center text-xs text-zinc-400">
+              Memuat daftar API Key...
+            </div>
+          ) : apiKeys.length === 0 ? (
+            <div className="p-6 rounded-lg border border-dashed border-zinc-200 bg-zinc-50/50 text-center space-y-2">
+              <Shield className="w-6 h-6 text-zinc-400 mx-auto" />
+              <div className="text-xs font-semibold text-zinc-700">Belum ada Secret Key untuk project ini</div>
+              <p className="text-[11px] text-zinc-500 max-w-md mx-auto">
+                Buat Secret Key untuk menghubungkan analitik proyek ini ke aplikasi Anda yang lain via REST API.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto border border-zinc-200 rounded-lg">
+              <table className="w-full text-left text-xs text-zinc-700">
+                <thead className="text-[11px] uppercase tracking-wider bg-zinc-50 text-zinc-500 border-b border-zinc-200">
+                  <tr>
+                    <th className="px-4 py-2.5 font-semibold">Nama Kunci</th>
+                    <th className="px-4 py-2.5 font-semibold">Prefix Kunci</th>
+                    <th className="px-4 py-2.5 font-semibold">Izin (Scope)</th>
+                    <th className="px-4 py-2.5 font-semibold">Dibuat Pada</th>
+                    <th className="px-4 py-2.5 font-semibold">Terakhir Digunakan</th>
+                    <th className="px-4 py-2.5 font-semibold text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-200 bg-white font-mono text-[11px]">
+                  {apiKeys.map((k) => (
+                    <tr key={k.id} className="hover:bg-zinc-50 transition-colors">
+                      <td className="px-4 py-2.5 font-sans font-medium text-zinc-900 text-xs">
+                        {k.name}
+                      </td>
+                      <td className="px-4 py-2.5 text-zinc-600">
+                        <code>{k.key_prefix}</code>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className="px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200 text-[10px]">
+                          metrics:read
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-zinc-500 font-sans text-xs">
+                        {new Date(k.created_at).toLocaleDateString("id-ID")}
+                      </td>
+                      <td className="px-4 py-2.5 text-zinc-500 font-sans text-xs">
+                        {k.last_used_at ? new Date(k.last_used_at).toLocaleString("id-ID") : "Belum pernah"}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-sans">
+                        <button
+                          type="button"
+                          disabled={deletingKeyId === k.id}
+                          onClick={() => handleDeleteApiKey(k.id)}
+                          className="p-1 rounded text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-50"
+                          title="Cabut / Hapus Kunci ini"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Script Tag Snippet Generator per Framework */}
       <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-5">
@@ -857,6 +1066,141 @@ export default function ProjectsPage() {
                     <span>Ya, Hapus Project</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Dialog: Buat Secret API Key Baru */}
+      {showCreateKeyModal && selectedProject && (
+        <div className="fixed inset-0 z-50 bg-zinc-950/20 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-xl max-w-md w-full space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
+              <div className="flex items-center gap-2">
+                <Lock className="w-4 h-4 text-zinc-900" />
+                <h3 className="text-sm font-bold text-zinc-900">Buat Secret Key Baru</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateKeyModal(false)}
+                className="text-zinc-400 hover:text-zinc-700 p-1 rounded-md cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateApiKey} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-zinc-700">Nama Identifier Kunci</label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Server Laravel / Aplikasi Mobile"
+                  value={newKeyName}
+                  onChange={(e) => setNewKeyName(e.target.value)}
+                  className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900"
+                  required
+                  autoFocus
+                />
+                <p className="text-[11px] text-zinc-500">
+                  Digunakan untuk mengidentifikasi server atau aplikasi yang menggunakan kunci ini.
+                </p>
+              </div>
+
+              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-lg text-xs space-y-1 text-zinc-600">
+                <div className="font-semibold text-zinc-900 flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Izin Akses (Scope): Read-Only</span>
+                </div>
+                <p className="text-[11px] text-zinc-500">
+                  Kunci ini hanya diizinkan membaca metrik dan ringkasan CTA proyek <code className="font-mono text-zinc-800">{selectedProject.id}</code>.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateKeyModal(false)}
+                  className="px-3.5 py-2 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isCreatingKey}
+                  className="px-4 py-2 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white flex items-center gap-1.5 cursor-pointer shadow-sm"
+                >
+                  {isCreatingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                  <span>{isCreatingKey ? "Membuat..." : "Buat Kunci"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Dialog: Kunci Baru Berhasil Dibuat (One-Time Display) */}
+      {createdKeyData && (
+        <div className="fixed inset-0 z-50 bg-zinc-950/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-2xl max-w-lg w-full space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                <Check className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-zinc-900">Secret Key Berhasil Dibuat!</h3>
+                <p className="text-xs text-zinc-500">Simpan sekarang di berkas konfigurasi (.env) server Anda</p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <strong className="font-semibold block">PENTING: Kunci ini hanya ditampilkan sekali!</strong>
+                <p className="text-[11px] text-amber-800 leading-relaxed">
+                  Demi alasan keamanan, kami tidak menyimpan kunci mentah ini di database kami (hanya hash SHA-256). Jika Anda kehilangan kunci ini, Anda harus membuat kunci baru.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-zinc-700">Secret Key Anda:</label>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 p-2.5 bg-zinc-900 text-emerald-400 font-mono text-xs rounded-lg border border-zinc-800 select-all overflow-x-auto">
+                  {createdKeyData.rawKey}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdKeyData.rawKey);
+                    setCopiedKey(true);
+                    setTimeout(() => setCopiedKey(false), 2000);
+                  }}
+                  className="px-3.5 py-2.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer shadow-sm"
+                >
+                  {copiedKey ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedKey ? "Tersalin!" : "Salin"}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-lg text-xs text-zinc-600 space-y-1">
+              <div className="font-semibold text-zinc-800">Contoh Penggunaan Header:</div>
+              <code className="font-mono text-[11px] block text-zinc-700">
+                x-api-key: {createdKeyData.rawKey}
+              </code>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-zinc-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreatedKeyData(null);
+                  setCopiedKey(false);
+                }}
+                className="px-5 py-2 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-medium cursor-pointer shadow-sm"
+              >
+                Saya Sudah Menyimpan Kunci Ini
               </button>
             </div>
           </div>

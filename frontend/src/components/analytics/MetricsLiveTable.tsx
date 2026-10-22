@@ -10,8 +10,14 @@ import {
   CheckCircle2, 
   ShieldCheck,
   TrendingUp,
-  FolderOpen
+  FolderOpen,
+  Pencil,
+  Tag,
+  X,
+  Sparkles,
+  Wand2
 } from 'lucide-react';
+import { resolveElementName, getBrandBadgeStyle } from '@/lib/elementNaming';
 
 export interface MetricRow {
   project_id: string;
@@ -19,6 +25,7 @@ export interface MetricRow {
   page_path: string;
   total_clicks: string | number;
   last_clicked_at: string;
+  display_name?: string | null;
 }
 
 interface ProjectOption {
@@ -67,6 +74,12 @@ export function MetricsLiveTable({
   const [internalProjects, setInternalProjects] = useState<ProjectOption[]>([]);
   const [internalSelectedProject, setInternalSelectedProject] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+
+  // State untuk Modal Ubah Nama Tampilan (Friendly Element Name)
+  const [editingRow, setEditingRow] = useState<MetricRow | null>(null);
+  const [aliasInput, setAliasInput] = useState('');
+  const [savingAlias, setSavingAlias] = useState(false);
+  const [aliasError, setAliasError] = useState<string | null>(null);
 
   const isControlled = propMetrics !== undefined;
 
@@ -157,6 +170,118 @@ export function MetricsLiveTable({
     }
   }, [isControlled, fetchMetrics, selectedProject]);
 
+  // Handler Buka Modal Ubah Nama
+  const handleOpenEditModal = (row: MetricRow) => {
+    setEditingRow(row);
+    const resolved = resolveElementName(row.element_id, row.display_name);
+    setAliasInput(row.display_name || resolved.suggestion || '');
+    setAliasError(null);
+  };
+
+  // Handler Simpan Nama Alias ke Backend
+  const handleSaveAlias = async () => {
+    if (!editingRow) return;
+    try {
+      setSavingAlias(true);
+      setAliasError(null);
+      const res = await fetch('/api/track/aliases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          projectId: editingRow.project_id || selectedProject,
+          elementId: editingRow.element_id,
+          displayName: aliasInput.trim(),
+        }),
+      });
+
+      let json: any = {};
+      const rawText = await res.text();
+      try {
+        json = JSON.parse(rawText);
+      } catch {
+        json = {};
+      }
+
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || rawText || `Server error (${res.status})`);
+      }
+
+      // Update state internal langsung untuk responsivitas instan
+      const updatedName = aliasInput.trim() || null;
+      setInternalMetrics((prev) =>
+        prev.map((m) =>
+          m.element_id === editingRow.element_id && m.project_id === editingRow.project_id
+            ? { ...m, display_name: updatedName }
+            : m
+        )
+      );
+
+      // Minta parent menyegarkan metrik jika tersedia
+      if (propOnRefresh) {
+        propOnRefresh();
+      } else {
+        fetchMetrics();
+      }
+
+      setEditingRow(null);
+    } catch (err: any) {
+      setAliasError(err.message || 'Terjadi kesalahan saat menyimpan nama');
+    } finally {
+      setSavingAlias(false);
+    }
+  };
+
+  // Handler Reset Nama Alias ke Default
+  const handleResetAlias = async () => {
+    if (!editingRow) return;
+    try {
+      setSavingAlias(true);
+      setAliasError(null);
+      const res = await fetch('/api/track/aliases', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          projectId: editingRow.project_id || selectedProject,
+          elementId: editingRow.element_id,
+        }),
+      });
+
+      let json: any = {};
+      const rawText = await res.text();
+      try {
+        json = JSON.parse(rawText);
+      } catch {
+        json = {};
+      }
+
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || rawText || `Server error (${res.status})`);
+      }
+
+      setInternalMetrics((prev) =>
+        prev.map((m) =>
+          m.element_id === editingRow.element_id && m.project_id === editingRow.project_id
+            ? { ...m, display_name: null }
+            : m
+        )
+      );
+
+      if (propOnRefresh) {
+        propOnRefresh();
+      } else {
+        fetchMetrics();
+      }
+
+      setEditingRow(null);
+    } catch (err: any) {
+      setAliasError(err.message || 'Terjadi kesalahan saat mereset nama');
+    } finally {
+      setSavingAlias(false);
+    }
+  };
+
   // Kalkulasi Ringkasan KPI
   const { totalAllClicks, maxClicks, topCta, filteredMetrics } = useMemo(() => {
     let sum = 0;
@@ -172,14 +297,21 @@ export function MetricsLiveTable({
       }
     });
 
-    const filtered = metrics.filter(
-      (m) =>
-        m.element_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        m.page_path.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const filtered = metrics.filter((m) => {
+      const resolved = resolveElementName(m.element_id, m.display_name);
+      const q = searchQuery.toLowerCase().trim();
+      return (
+        m.element_id.toLowerCase().includes(q) ||
+        resolved.displayName.toLowerCase().includes(q) ||
+        m.page_path.toLowerCase().includes(q)
+      );
+    });
 
     return { totalAllClicks: sum, maxClicks: max, topCta: top, filteredMetrics: filtered };
   }, [metrics, searchQuery]);
+
+  const topRow = topCta as MetricRow | null;
+  const topResolved = topRow ? resolveElementName(topRow.element_id, topRow.display_name) : null;
 
   return (
     <div className="space-y-6">
@@ -211,8 +343,8 @@ export function MetricsLiveTable({
             <span className="text-xs font-medium">Top Performing CTA</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
           </div>
-          <div className="text-sm font-bold text-zinc-900 truncate font-mono" title={(topCta as any)?.element_id || '-'}>
-            {(topCta as any)?.element_id || '-'}
+          <div className="text-sm font-bold text-zinc-900 truncate" title={topResolved?.displayName || '-'}>
+            {topResolved?.displayName || '-'}
           </div>
           <div className="text-[11px] text-zinc-500">
             {topCta ? `${(topCta as any).total_clicks} klik tercatat` : 'Belum ada data'}
@@ -299,7 +431,7 @@ export function MetricsLiveTable({
             <table className="w-full text-left text-xs text-zinc-700">
               <thead className="text-[11px] uppercase tracking-wider bg-zinc-50 text-zinc-500 border-b border-zinc-200">
                 <tr>
-                  <th className="px-5 py-3 font-semibold">Element ID (CTA)</th>
+                  <th className="px-5 py-3 font-semibold">Nama Tombol / Elemen (CTA)</th>
                   <th className="px-5 py-3 font-semibold">Path Halaman</th>
                   <th className="px-5 py-3 font-semibold">Distribusi Visual</th>
                   <th className="px-5 py-3 font-semibold text-center">Total Klik</th>
@@ -310,12 +442,63 @@ export function MetricsLiveTable({
                 {filteredMetrics.map((row, idx) => {
                   const clickCount = Number(row.total_clicks) || 0;
                   const ratio = Math.round((clickCount / maxClicks) * 100);
+                  const resolved = resolveElementName(row.element_id, row.display_name);
+                  const brandStyle = getBrandBadgeStyle(resolved.brandLabel);
 
                   return (
-                    <tr key={`${row.project_id}-${row.element_id}-${idx}`} className="hover:bg-zinc-50/80 transition-colors">
+                    <tr key={`${row.project_id}-${row.element_id}-${idx}`} className="hover:bg-zinc-50/80 transition-colors group">
                       <td className="px-5 py-3.5">
-                        <div className="font-mono text-zinc-900 font-semibold">{row.element_id}</div>
-                        <div className="text-[11px] text-zinc-400 font-mono">{row.project_id}</div>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="space-y-0.5 min-w-0">
+                            {resolved.isCustom ? (
+                              <>
+                                <div className="text-xs font-semibold text-zinc-900 flex items-center gap-1.5 truncate">
+                                  <span>{resolved.displayName}</span>
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
+                                    Kustom
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-zinc-400 font-mono flex items-center gap-1">
+                                  <span>#{row.element_id}</span>
+                                </div>
+                              </>
+                            ) : resolved.isAutoNamed ? (
+                              <>
+                                <div className="text-xs font-semibold text-zinc-900 flex items-center gap-1.5 truncate">
+                                  <span>{resolved.displayName}</span>
+                                  <span 
+                                    className={`text-[10px] px-1.5 py-0.2 rounded-full border font-medium flex items-center gap-1 ${brandStyle.pill}`}
+                                    title="Nama diformat otomatis oleh sistem berdasarkan jenis sosial media"
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full ${brandStyle.dot}`} />
+                                    <span>Auto</span>
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-zinc-400 font-mono flex items-center gap-1">
+                                  <span>#{row.element_id}</span>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="font-mono text-zinc-900 font-semibold text-xs">
+                                  {row.element_id}
+                                </div>
+                                <div className="text-[11px] text-zinc-400 font-mono">
+                                  {row.project_id}
+                                </div>
+                              </>
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditModal(row)}
+                            className="p-1.5 rounded-lg border border-transparent hover:border-zinc-200 hover:bg-zinc-100 text-zinc-400 hover:text-zinc-900 transition-all cursor-pointer shrink-0 opacity-80 group-hover:opacity-100"
+                            title="Ubah nama tampilan tombol ini"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                       <td className="px-5 py-3.5 font-mono text-zinc-600">{row.page_path}</td>
                       <td className="px-5 py-3.5 w-44">
@@ -356,6 +539,134 @@ export function MetricsLiveTable({
           </div>
         </div>
       </div>
+
+      {/* Modal Dialog: Ubah Nama Tampilan Tombol */}
+      {editingRow && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/40 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => !savingAlias && setEditingRow(null)}
+        >
+          <div 
+            className="bg-white rounded-xl border border-zinc-200 shadow-xl max-w-md w-full p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-zinc-100 border border-zinc-200 flex items-center justify-center text-zinc-800">
+                  <Tag className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-zinc-900">Ubah Nama Tampilan Tombol</h3>
+                  <p className="text-[11px] text-zinc-500">Beri nama ramah agar mudah dibaca di analitik</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={savingAlias}
+                onClick={() => setEditingRow(null)}
+                className="text-zinc-400 hover:text-zinc-700 p-1 rounded-md cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-lg space-y-1.5">
+                <div className="flex items-center justify-between text-zinc-500">
+                  <span className="font-medium">Element ID Asli</span>
+                  <span className="font-mono text-[10px] text-zinc-400">Proyek: {editingRow.project_id}</span>
+                </div>
+                <div className="font-mono font-semibold text-zinc-900 bg-white px-2 py-1 rounded border border-zinc-200 text-xs">
+                  #{editingRow.element_id}
+                </div>
+                <div className="text-[11px] text-zinc-500 flex items-center gap-2 pt-0.5">
+                  <span>Path: <code className="font-mono">{editingRow.page_path}</code></span>
+                  <span>&bull;</span>
+                  <span>Total: <strong>{editingRow.total_clicks} klik</strong></span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="custom-display-name-input" className="block font-semibold text-zinc-800">
+                    Nama Tampilan Baru (Friendly Name)
+                  </label>
+                  {(() => {
+                    const resolved = resolveElementName(editingRow.element_id, editingRow.display_name);
+                    if (resolved.suggestion && resolved.suggestion !== aliasInput) {
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setAliasInput(resolved.suggestion)}
+                          className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
+                          title="Klik untuk mengisi saran otomatis dari sistem"
+                        >
+                          <Wand2 className="w-3 h-3" />
+                          <span>Gunakan Saran: &quot;{resolved.suggestion}&quot;</span>
+                        </button>
+                      );
+                    }
+                    return null;
+                  })()}
+                </div>
+                <input
+                  id="custom-display-name-input"
+                  type="text"
+                  placeholder="Contoh: WhatsApp CS Konsultasi, Tombol Checkout Utama..."
+                  value={aliasInput}
+                  onChange={(e) => setAliasInput(e.target.value)}
+                  className="w-full px-3 py-2 border border-zinc-300 rounded-lg text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 focus:border-zinc-900"
+                  autoFocus
+                />
+                <p className="text-[11px] text-zinc-500">
+                  Nama ini akan menggantikan ID teknis di seluruh tabel analitik dan diagram ringkasan dashboard.
+                </p>
+              </div>
+
+              {aliasError && (
+                <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                  {aliasError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-zinc-100 gap-2">
+              <div>
+                {editingRow.display_name && (
+                  <button
+                    type="button"
+                    disabled={savingAlias}
+                    onClick={handleResetAlias}
+                    className="text-xs text-rose-600 hover:text-rose-700 hover:underline cursor-pointer disabled:opacity-50"
+                  >
+                    Reset ke Default
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={savingAlias}
+                  onClick={() => setEditingRow(null)}
+                  className="px-3 py-1.5 text-xs text-zinc-600 hover:text-zinc-900 bg-white border border-zinc-200 rounded-lg hover:bg-zinc-50 cursor-pointer disabled:opacity-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={savingAlias}
+                  onClick={handleSaveAlias}
+                  className="px-4 py-1.5 text-xs bg-zinc-900 hover:bg-zinc-800 text-white font-medium rounded-lg transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-xs"
+                >
+                  {savingAlias && <RotateCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{savingAlias ? 'Menyimpan...' : 'Simpan Nama'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

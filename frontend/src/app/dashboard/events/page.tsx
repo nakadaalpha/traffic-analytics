@@ -21,6 +21,7 @@ import {
   Share2,
   X,
 } from 'lucide-react';
+import { resolveElementName, getBrandBadgeStyle } from '@/lib/elementNaming';
 
 interface ClickEventRow {
   id: string;
@@ -34,6 +35,7 @@ interface ClickEventRow {
   country?: string;
   city?: string;
   created_at: string;
+  display_name?: string | null;
 }
 
 interface ProjectOption {
@@ -338,13 +340,15 @@ export default function EventsPage() {
         // Filter kata kunci pencarian
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase().trim();
+          const resolved = resolveElementName(evt.element_id, evt.display_name);
           const matchElement = (evt.element_id || '').toLowerCase().includes(q);
+          const matchAlias = (resolved.displayName || '').toLowerCase().includes(q);
           const matchPath = (evt.page_path || '').toLowerCase().includes(q);
           const matchCity = (evt.city || '').toLowerCase().includes(q);
           const matchCountry = (evt.country || '').toLowerCase().includes(q);
           const matchId = String(evt.id).includes(q);
           const matchSession = (evt.session_id || '').toLowerCase().includes(q);
-          return matchElement || matchPath || matchCity || matchCountry || matchId || matchSession;
+          return matchElement || matchAlias || matchPath || matchCity || matchCountry || matchId || matchSession;
         }
 
         return true;
@@ -588,22 +592,46 @@ export default function EventsPage() {
                   const osStyle = getOsBadgeStyle(dev.os);
                   const browserStyle = getBrowserBadgeStyle(dev.browser);
                   const ctaStyle = getCtaBadgeStyle(evt.element_id);
+                  const resolved = resolveElementName(evt.element_id, evt.display_name);
+                  const brandBadge = getBrandBadgeStyle(resolved.brandLabel);
 
                   return (
                     <tr key={evt.id} className="hover:bg-zinc-50/80 transition-colors">
                       <td className="px-5 py-3.5 font-mono text-[11px] text-zinc-400">#{evt.id}</td>
                       <td className="px-5 py-3.5">
-                        <span
-                          className={`font-mono font-semibold px-2 py-0.5 rounded border inline-flex items-center gap-1.5 ${ctaStyle.pill}`}
-                        >
-                          <span className={`w-1.5 h-1.5 rounded-full ${ctaStyle.dot}`} />
-                          <span>{evt.element_id}</span>
-                          {ctaStyle.tag && (
-                            <span className="text-[9px] uppercase tracking-wider font-bold opacity-75 ml-0.5">
-                              {ctaStyle.tag}
-                            </span>
-                          )}
-                        </span>
+                        <div className="flex flex-col gap-1 items-start">
+                          {resolved.isCustom ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-zinc-900 text-xs">
+                                {resolved.displayName}
+                              </span>
+                              <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
+                                Kustom
+                              </span>
+                            </div>
+                          ) : resolved.isAutoNamed ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-semibold text-zinc-900 text-xs">
+                                {resolved.displayName}
+                              </span>
+                              <span className={`text-[9px] px-1.5 py-0.2 rounded-full border font-medium flex items-center gap-1 ${brandBadge.pill}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${brandBadge.dot}`} />
+                                <span>Auto</span>
+                              </span>
+                            </div>
+                          ) : null}
+                          <span
+                            className={`font-mono text-[11px] font-semibold px-2 py-0.5 rounded border inline-flex items-center gap-1.5 ${ctaStyle.pill}`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${ctaStyle.dot}`} />
+                            <span>{evt.element_id}</span>
+                            {ctaStyle.tag && (
+                              <span className="text-[9px] uppercase tracking-wider font-bold opacity-75 ml-0.5">
+                                {ctaStyle.tag}
+                              </span>
+                            )}
+                          </span>
+                        </div>
                       </td>
                       <td className="px-5 py-3.5 font-mono text-zinc-600">{evt.page_path}</td>
                       <td className="px-5 py-3.5">

@@ -29,6 +29,7 @@ import {
   ArrowDownUp,
   Share2,
 } from 'lucide-react';
+import { resolveElementName } from '@/lib/elementNaming';
 
 ChartJS.register(
   CategoryScale,
@@ -49,6 +50,7 @@ export interface MetricRow {
   page_path: string;
   total_clicks: string | number;
   last_clicked_at: string;
+  display_name?: string | null;
 }
 
 export interface ClickEventRow {
@@ -63,6 +65,7 @@ export interface ClickEventRow {
   country?: string;
   city?: string;
   created_at: string;
+  display_name?: string | null;
 }
 
 interface AnalyticsChartJsDemoProps {
@@ -169,11 +172,16 @@ export default function AnalyticsChartJsDemo({
   // Top CTA absolut untuk smart insights (tidak terpengaruh visual filter)
   const sortedCtaList = useMemo(() => {
     return [...metrics]
-      .map((m) => ({
-        element_id: m.element_id,
-        clicks: Number(m.total_clicks) || 0,
-        page_path: m.page_path,
-      }))
+      .map((m) => {
+        const resolved = resolveElementName(m.element_id, m.display_name);
+        return {
+          element_id: m.element_id,
+          display_name: m.display_name,
+          resolvedName: resolved.displayName,
+          clicks: Number(m.total_clicks) || 0,
+          page_path: m.page_path,
+        };
+      })
       .sort((a, b) => b.clicks - a.clicks)
       .slice(0, 5);
   }, [metrics]);
@@ -182,12 +190,17 @@ export default function AnalyticsChartJsDemo({
   const processedCtaList = useMemo(() => {
     let list = [...metrics].map((m) => {
       const brand = getCtaBrandColor(m.element_id);
+      const resolved = resolveElementName(m.element_id, m.display_name);
       return {
         element_id: m.element_id,
+        display_name: m.display_name,
+        resolvedName: resolved.displayName,
+        isCustom: resolved.isCustom,
+        isAutoNamed: resolved.isAutoNamed,
         clicks: Number(m.total_clicks) || 0,
         page_path: m.page_path,
-        isSocial: Boolean(brand.label),
-        socialLabel: brand.label,
+        isSocial: Boolean(brand.label) || resolved.isAutoNamed,
+        socialLabel: brand.label || resolved.brandLabel,
       };
     });
 
@@ -202,9 +215,9 @@ export default function AnalyticsChartJsDemo({
     } else if (ctaSort === 'asc') {
       list.sort((a, b) => a.clicks - b.clicks);
     } else if (ctaSort === 'alpha-asc') {
-      list.sort((a, b) => a.element_id.localeCompare(b.element_id));
+      list.sort((a, b) => a.resolvedName.localeCompare(b.resolvedName));
     } else if (ctaSort === 'alpha-desc') {
-      list.sort((a, b) => b.element_id.localeCompare(a.element_id));
+      list.sort((a, b) => b.resolvedName.localeCompare(a.resolvedName));
     }
 
     // Pemotongan limit tampilan
@@ -231,11 +244,11 @@ export default function AnalyticsChartJsDemo({
       };
     }
 
-    const backgroundColors = processedCtaList.map((item, idx) => {
+    const defaultColor = '#27272a'; // zinc-800
+    const backgroundColors = processedCtaList.map((item) => {
       const brand = getCtaBrandColor(item.element_id);
       if (brand.label) return brand.bg;
-      const zincs = ['#18181b', '#3f3f46', '#71717a', '#a1a1aa', '#d4d4d8'];
-      return zincs[idx % zincs.length];
+      return defaultColor;
     });
 
     const hoverColors = processedCtaList.map((item) => {
@@ -245,7 +258,7 @@ export default function AnalyticsChartJsDemo({
     });
 
     return {
-      labels: processedCtaList.map((item) => item.element_id),
+      labels: processedCtaList.map((item) => item.resolvedName),
       datasets: [
         {
           label: 'Jumlah Klik',
@@ -275,10 +288,18 @@ export default function AnalyticsChartJsDemo({
         displayColors: false,
         callbacks: {
           label: (context: any) => {
-            const rawId = processedCtaList[context.dataIndex]?.element_id || '';
+            const item = processedCtaList[context.dataIndex];
+            const rawId = item?.element_id || '';
             const brand = getCtaBrandColor(rawId);
-            const tag = brand.label ? ` (${brand.label})` : '';
-            return ` ${context.parsed.x} total klik tercatat${tag}`;
+            const tag = item?.isCustom
+              ? ' (Kustom)'
+              : item?.isAutoNamed
+              ? ' (Auto)'
+              : brand.label
+              ? ` (${brand.label})`
+              : '';
+            const aliasTag = item?.resolvedName !== rawId ? ` [ID: #${rawId}]` : '';
+            return ` ${context.parsed.x} total klik tercatat${tag}${aliasTag}`;
           },
         },
       },
@@ -540,9 +561,11 @@ export default function AnalyticsChartJsDemo({
     let ctaDesc = 'Belum ada tombol CTA yang diklik pada proyek terpilih.';
 
     if (topCta && totalClicks > 0) {
-      ctaTitle = `Tombol "${topCta.element_id}" Mendominasi Konversi (${topShare}%)`;
+      const topLabel = topCta.resolvedName;
+      ctaTitle = `Tombol "${topLabel}" Mendominasi Konversi (${topShare}%)`;
       if (sortedCtaList.length > 1) {
-        ctaDesc = `Tombol ini telah menerima ${topCta.clicks} klik dari total ${totalClicks} klik pada proyek ini. Pengunjung lebih dominan menghubungi lewat ${topCta.element_id} dibandingkan ${sortedCtaList[1].element_id} (${sortedCtaList[1].clicks} klik).`;
+        const secondLabel = sortedCtaList[1].resolvedName;
+        ctaDesc = `Tombol ini telah menerima ${topCta.clicks} klik dari total ${totalClicks} klik pada proyek ini. Pengunjung lebih dominan berinteraksi lewat "${topLabel}" dibandingkan "${secondLabel}" (${sortedCtaList[1].clicks} klik).`;
       } else {
         ctaDesc = `Tombol ini menyumbang seluruh konversi klik (${topCta.clicks} klik) yang tercatat pada proyek saat ini.`;
       }

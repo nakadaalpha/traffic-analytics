@@ -70,3 +70,35 @@ CREATE TABLE IF NOT EXISTS cta_metrics (
 
 CREATE INDEX IF NOT EXISTS idx_cta_metrics_clicks 
     ON cta_metrics (project_id, total_clicks DESC);
+
+-- 5. Tabel element_aliases: Menyimpan label kustom / friendly display name untuk button/elemen CTA
+CREATE TABLE IF NOT EXISTS element_aliases (
+    project_id TEXT NOT NULL,
+    element_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    PRIMARY KEY (project_id, element_id),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_element_aliases_project 
+    ON element_aliases (project_id);
+
+-- 6. Tabel project_api_keys: Mengelola Secret API Key untuk konsumsi API eksternal
+CREATE TABLE IF NOT EXISTS project_api_keys (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    key_hash TEXT UNIQUE NOT NULL,
+    key_prefix TEXT NOT NULL,
+    name TEXT DEFAULT 'Default Secret Key' NOT NULL,
+    scopes TEXT DEFAULT '["metrics:read"]' NOT NULL,
+    is_active INTEGER DEFAULT 1 NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    last_used_at TEXT,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON project_api_keys (key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_project ON project_api_keys (project_id);
+
+

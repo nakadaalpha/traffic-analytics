@@ -135,11 +135,14 @@ function isOriginAllowed(originHeader: string | null, allowedOriginsJson: string
   const incomingHost = extractHostname(originHeader);
   if (!incomingHost) return false;
 
-  // 1. Selalu izinkan localhost & 127.0.0.1 pada port berapa pun (Vite, Next.js, CRA, Astro, dll)
+  // 1. Selalu izinkan localhost, loopback, dan IP jaringan lokal privat (LAN/WiFi testing)
   if (
     incomingHost === 'localhost' ||
     incomingHost === '127.0.0.1' ||
-    incomingHost.endsWith('.localhost')
+    incomingHost.endsWith('.localhost') ||
+    incomingHost.startsWith('192.168.') ||
+    incomingHost.startsWith('10.') ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(incomingHost)
   ) {
     return true;
   }
@@ -156,11 +159,23 @@ function isOriginAllowed(originHeader: string | null, allowedOriginsJson: string
       const allowedHost = extractHostname(allowed);
       if (!allowedHost) return false;
 
-      // Izinkan subdomain atau host yang sama persis
-      return (
+      // Izinkan host yang sama persis atau subdomain resmi
+      if (
         incomingHost === allowedHost ||
         incomingHost.endsWith(`.${allowedHost}`)
-      );
+      ) {
+        return true;
+      }
+
+      // Dukung Vercel Preview Deployments (misal: projectname-xxx.vercel.app)
+      if (allowedHost.endsWith('.vercel.app')) {
+        const vercelPrefix = allowedHost.replace(/\.vercel\.app$/, '');
+        if (incomingHost.endsWith('.vercel.app') && incomingHost.startsWith(vercelPrefix)) {
+          return true;
+        }
+      }
+
+      return false;
     });
   } catch {
     return false;
@@ -202,6 +217,7 @@ app.use(
     allowHeaders: [
       'Content-Type',
       'Authorization',
+      'x-api-key',
       'x-project-id',
       'x-write-key',
       'x-requested-with',
@@ -249,6 +265,223 @@ app.get('/health', (c) => {
     auth_enabled: true,
     timestamp: new Date().toISOString(),
   });
+});
+
+// -------------------------------------------------------------
+// GET /tracker.js (Edge-Served Universal Tracker Script)
+// -------------------------------------------------------------
+app.get('/tracker.js', (c) => {
+  const trackerScript = `(function () {
+  'use strict';
+
+  // Dapatkan referensi elemen <script> tracker saat ini secara presisi
+  var currentScript =
+    document.currentScript ||
+    document.querySelector('script[data-project-id]') ||
+    document.querySelector('script[src*="tracker.js"]') ||
+    (function () {
+      var scripts = document.getElementsByTagName('script');
+      for (var i = scripts.length - 1; i >= 0; i--) {
+        if (scripts[i].getAttribute('data-project-id') || (scripts[i].src && scripts[i].src.indexOf('tracker.js') !== -1)) {
+          return scripts[i];
+        }
+      }
+      return scripts[scripts.length - 1];
+    })();
+
+  if (!currentScript) return;
+
+  // Baca konfigurasi dari atribut HTML script tag
+  var projectId =
+    currentScript.getAttribute('data-project-id') ||
+    currentScript.getAttribute('data-website-id') ||
+    'prj_default';
+  var writeKey = currentScript.getAttribute('data-write-key') || 'pk_live_demo12345';
+  
+  // Endpoint backend default ke Cloudflare Workers
+  var endpoint =
+    currentScript.getAttribute('data-endpoint') ||
+    'https://traffic-analytics-api.fireup-dist.workers.dev/api/track/click';
+
+  // Opsi Smart Auto-Capture (Aktif secara default)
+  var autoCaptureEnabled = currentScript.getAttribute('data-auto-capture') !== 'false';
+
+  // Sesi unik browser
+  var STORAGE_KEY = 'cta_session_id';
+  function getSessionId() {
+    try {
+      var sess = window.sessionStorage.getItem(STORAGE_KEY);
+      if (!sess) {
+        sess = 'sess_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now().toString(36);
+        window.sessionStorage.setItem(STORAGE_KEY, sess);
+      }
+      return sess;
+    } catch (e) {
+      return 'sess_' + Date.now();
+    }
+  }
+
+  // Cooldown debouncing untuk mencegah klik ganda tak disengaja
+  var cooldownMap = {};
+  var COOLDOWN_MS = 600;
+
+  function sendTracking(elementId) {
+    if (!elementId) return;
+
+    var now = Date.now();
+    if (cooldownMap[elementId] && now - cooldownMap[elementId] < COOLDOWN_MS) {
+      return;
+    }
+    cooldownMap[elementId] = now;
+
+    var payload = JSON.stringify({
+      projectId: projectId,
+      writeKey: writeKey,
+      elementId: elementId,
+      pagePath: window.location.pathname || '/',
+      sessionId: getSessionId(),
+    });
+
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      try {
+        var blob = new Blob([payload], { type: 'text/plain;charset=UTF-8' });
+        if (navigator.sendBeacon(endpoint, blob)) {
+          return;
+        }
+      } catch (err) {}
+    }
+
+    // Fallback keepalive fetch
+    try {
+      fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-project-id': projectId,
+          'x-write-key': writeKey,
+        },
+        body: payload,
+        keepalive: true,
+      }).catch(function () {});
+    } catch (err) {}
+  }
+
+  // Helper untuk mengubah string menjadi slug bersih dan ramah metrik
+  function cleanSlug(text) {
+    if (!text) return '';
+    return text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .substring(0, 32);
+  }
+
+  // Logika Smart Auto-Capture: mendeteksi konteks produk dan aksi tombol secara otomatis
+  function resolveAutoCaptureId(clickable) {
+    if (!clickable || clickable.hasAttribute('data-track-ignore')) return null;
+
+    // 1. Ekstrak aksi dari teks tombol / link
+    var actionText = (clickable.innerText || clickable.textContent || '').trim();
+
+    // 2. Jika tidak ada teks (misal tombol logo brand), cari tag <img> di dalamnya
+    if (!actionText || actionText.length === 0) {
+      var img = clickable.querySelector('img');
+      if (img) {
+        actionText = img.getAttribute('alt') || img.getAttribute('title') || '';
+        if (actionText) {
+          actionText = 'brand-' + actionText;
+        }
+      }
+    }
+
+    // 3. Cek atribut fallback seperti aria-label, title, atau tautan href (mailto / sosmed)
+    if (!actionText) {
+      actionText = clickable.getAttribute('aria-label') || clickable.getAttribute('title') || '';
+    }
+    if (!actionText && clickable.tagName === 'A') {
+      var href = clickable.getAttribute('href') || '';
+      if (href.startsWith('mailto:')) {
+        actionText = 'email';
+      } else if (href.includes('instagram.com')) {
+        actionText = 'instagram';
+      } else if (href.includes('wa.me') || href.includes('whatsapp.com')) {
+        actionText = 'whatsapp';
+      } else if (href.includes('github.com')) {
+        actionText = 'github';
+      } else if (href.includes('linkedin.com')) {
+        actionText = 'linkedin';
+      }
+    }
+
+    // 4. Ekstrak konteks produk / item terdekat (misal kartu mobil)
+    var contextText = '';
+    var cardContainer = clickable.closest('[class*="card"], [class*="item"], [class*="product"], article, li');
+    if (cardContainer) {
+      // Cari elemen judul produk atau model mobil (h1-h4 atau kelas bertuliskan title/model/name)
+      var heading = cardContainer.querySelector('h1, h2, h3, h4, [class*="model"], [class*="title"], [class*="name"]');
+      if (heading && heading !== clickable && !heading.contains(clickable)) {
+        contextText = (heading.innerText || heading.textContent || '').trim();
+      }
+    }
+
+    var actionSlug = cleanSlug(actionText);
+    var contextSlug = cleanSlug(contextText);
+
+    if (contextSlug && actionSlug) {
+      // Contoh: "812" + "explore" -> "812-explore"
+      return contextSlug + '-' + actionSlug;
+    } else if (contextSlug) {
+      return contextSlug;
+    } else if (actionSlug) {
+      return actionSlug.startsWith('btn-') ? actionSlug : 'btn-' + actionSlug;
+    }
+
+    return null;
+  }
+
+  // Global Event Delegation listener
+  document.addEventListener(
+    'click',
+    function (event) {
+      var target = event.target;
+      if (!target || typeof target.closest !== 'function') return;
+
+      // 1. Prioritas Utama: Elemen dengan atribut eksplisit data-track-cta
+      var explicitCta = target.closest('[data-track-cta]');
+      if (explicitCta) {
+        var explicitId = explicitCta.getAttribute('data-track-cta');
+        if (explicitId && explicitId.trim()) {
+          sendTracking(explicitId.trim());
+          return;
+        }
+      }
+
+      // 2. Solusi 1: Smart Auto-Capture (jika tidak ada data-track-cta)
+      if (autoCaptureEnabled) {
+        var clickable = target.closest('button, a, input[type="submit"], input[type="button"], [role="button"]');
+        if (clickable) {
+          var autoId = resolveAutoCaptureId(clickable);
+          if (autoId) {
+            sendTracking(autoId);
+          }
+        }
+      }
+    },
+    true
+  );
+
+  // Ekspos fungsi kustom jika user ingin tracking manual via JS: window.clickTracker.track('nama_event')
+  window.clickTracker = {
+    track: function (elementId) {
+      sendTracking(elementId);
+    },
+  };
+})();`;
+
+  c.header('Content-Type', 'application/javascript; charset=utf-8');
+  c.header('Cache-Control', 'public, max-age=1800, s-maxage=3600');
+  c.header('Access-Control-Allow-Origin', '*');
+  return c.body(trackerScript);
 });
 
 // -------------------------------------------------------------
@@ -646,10 +879,12 @@ app.delete('/api/track/projects/:id?', async (c) => {
       return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses untuk menghapus project ini' }, 403);
     }
 
-    // Hapus metrics, events, dan project secara bersih
+    // Hapus metrics, events, aliases, api keys, dan project secara bersih
     await c.env.DB.batch([
       c.env.DB.prepare(`DELETE FROM cta_metrics WHERE project_id = ?;`).bind(projectId),
       c.env.DB.prepare(`DELETE FROM click_events WHERE project_id = ?;`).bind(projectId),
+      c.env.DB.prepare(`DELETE FROM element_aliases WHERE project_id = ?;`).bind(projectId),
+      c.env.DB.prepare(`DELETE FROM project_api_keys WHERE project_id = ?;`).bind(projectId),
       c.env.DB.prepare(`DELETE FROM projects WHERE id = ?;`).bind(projectId),
     ]);
 
@@ -663,6 +898,31 @@ app.delete('/api/track/projects/:id?', async (c) => {
     return c.json({ success: false, error: error.message || 'Gagal menghapus project' }, 500);
   }
 });
+
+// Helper inisialisasi tabel element_aliases jika belum tersedia di D1
+let aliasesTableInitialized = false;
+async function ensureAliasesTable(db: D1Database) {
+  if (aliasesTableInitialized) return;
+  try {
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS element_aliases (
+        project_id TEXT NOT NULL,
+        element_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now')) NOT NULL,
+        PRIMARY KEY (project_id, element_id),
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+    `).run();
+    await db.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_element_aliases_project 
+      ON element_aliases (project_id);
+    `).run();
+    aliasesTableInitialized = true;
+  } catch (err: any) {
+    console.warn('[DB] Failed to ensure element_aliases table:', err.message);
+  }
+}
 
 // GET /api/track/metrics (Cek kepemilikan project sebelum menampilkan)
 app.get('/api/track/metrics', async (c) => {
@@ -682,11 +942,15 @@ app.get('/api/track/metrics', async (c) => {
       }
     }
 
+    await ensureAliasesTable(c.env.DB);
+
     const { results } = await c.env.DB.prepare(
-      `SELECT project_id, element_id, page_path, CAST(total_clicks AS TEXT) as total_clicks, last_clicked_at 
-       FROM cta_metrics 
-       WHERE project_id = ?
-       ORDER BY total_clicks DESC, last_clicked_at DESC 
+      `SELECT m.project_id, m.element_id, m.page_path, CAST(m.total_clicks AS TEXT) as total_clicks, m.last_clicked_at,
+              a.display_name
+       FROM cta_metrics m
+       LEFT JOIN element_aliases a ON a.project_id = m.project_id AND a.element_id = m.element_id
+       WHERE m.project_id = ?
+       ORDER BY m.total_clicks DESC, m.last_clicked_at DESC 
        LIMIT 100;`
     )
       .bind(projectId)
@@ -716,14 +980,18 @@ app.get('/api/track/events', async (c) => {
       }
     }
 
+    await ensureAliasesTable(c.env.DB);
+
     const limitParam = parseInt(c.req.query('limit') || '200', 10);
     const limit = isNaN(limitParam) ? 200 : Math.min(Math.max(limitParam, 1), 1000);
 
     const { results } = await c.env.DB.prepare(
-      `SELECT CAST(id AS TEXT) as id, project_id, element_id, page_path, session_id, user_id, user_agent, ip_address, country, city, created_at 
-       FROM click_events 
-       WHERE project_id = ?
-       ORDER BY created_at DESC 
+      `SELECT CAST(e.id AS TEXT) as id, e.project_id, e.element_id, e.page_path, e.session_id, e.user_id, e.user_agent, e.ip_address, e.country, e.city, e.created_at,
+              a.display_name
+       FROM click_events e
+       LEFT JOIN element_aliases a ON a.project_id = e.project_id AND a.element_id = e.element_id
+       WHERE e.project_id = ?
+       ORDER BY e.created_at DESC 
        LIMIT ?;`
     )
       .bind(projectId, limit)
@@ -733,6 +1001,673 @@ app.get('/api/track/events', async (c) => {
   } catch (error: any) {
     console.error('[Get Events Error]', error.message);
     return c.json({ success: false, error: 'Failed to fetch click events' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// Element Alias Endpoints (Friendly Custom Display Name)
+// -------------------------------------------------------------
+
+// GET /api/track/aliases (Daftar nama kustom/alias tombol untuk project)
+app.get('/api/track/aliases', async (c) => {
+  try {
+    const projectId = c.req.query('projectId') || 'prj_default';
+    const currentUser = await extractCurrentUser(c);
+
+    const project = await c.env.DB.prepare(`SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`)
+      .bind(projectId)
+      .first<any>();
+
+    if (project && project.owner_id) {
+      if (!currentUser || currentUser.id !== project.owner_id) {
+        return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses ke project ini' }, 403);
+      }
+    }
+
+    await ensureAliasesTable(c.env.DB);
+
+    const { results } = await c.env.DB.prepare(
+      `SELECT project_id, element_id, display_name, updated_at 
+       FROM element_aliases 
+       WHERE project_id = ?
+       ORDER BY updated_at DESC;`
+    )
+      .bind(projectId)
+      .all();
+
+    return c.json({ success: true, projectId, count: results.length, data: results });
+  } catch (error: any) {
+    console.error('[Get Aliases Error]', error.message);
+    return c.json({ success: false, error: 'Failed to fetch element aliases' }, 500);
+  }
+});
+
+// POST /api/track/aliases (Simpan atau perbarui alias nama tombol)
+app.post('/api/track/aliases', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const projectId = (body.projectId || c.req.query('projectId') || 'prj_default').trim();
+    const elementId = (body.elementId || '').trim();
+    const displayName = (body.displayName !== undefined ? String(body.displayName) : '').trim();
+
+    if (!projectId || !elementId) {
+      return c.json({ success: false, error: 'Project ID dan Element ID wajib disertakan' }, 400);
+    }
+
+    const currentUser = await extractCurrentUser(c);
+    const project = await c.env.DB.prepare(`SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`)
+      .bind(projectId)
+      .first<any>();
+
+    if (!project) {
+      return c.json({ success: false, error: 'Project tidak ditemukan' }, 404);
+    }
+
+    if (project.owner_id) {
+      if (!currentUser || currentUser.id !== project.owner_id) {
+        return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses untuk mengubah project ini' }, 403);
+      }
+    }
+
+    await ensureAliasesTable(c.env.DB);
+
+    if (!displayName) {
+      // Jika dikosongkan, reset/hapus alias
+      await c.env.DB.prepare(
+        `DELETE FROM element_aliases WHERE project_id = ? AND element_id = ?;`
+      )
+        .bind(projectId, elementId)
+        .run();
+
+      return c.json({
+        success: true,
+        message: 'Nama elemen berhasil direset ke default',
+        data: { projectId, elementId, displayName: null },
+      });
+    }
+
+    // UPSERT alias
+    await c.env.DB.prepare(
+      `INSERT INTO element_aliases (project_id, element_id, display_name, updated_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(project_id, element_id)
+       DO UPDATE SET display_name = excluded.display_name, updated_at = datetime('now');`
+    )
+      .bind(projectId, elementId, displayName.slice(0, 100))
+      .run();
+
+    return c.json({
+      success: true,
+      message: 'Nama tampilan elemen berhasil disimpan',
+      data: {
+        projectId,
+        elementId,
+        displayName: displayName.slice(0, 100),
+      },
+    });
+  } catch (error: any) {
+    console.error('[Save Alias Error]', error.message);
+    return c.json({ success: false, error: error.message || 'Gagal menyimpan alias elemen' }, 500);
+  }
+});
+
+// DELETE /api/track/aliases (Hapus nama alias elemen tombol)
+app.delete('/api/track/aliases', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    const projectId = (c.req.query('projectId') || body.projectId || 'prj_default').trim();
+    const elementId = (c.req.query('elementId') || body.elementId || '').trim();
+
+    if (!projectId || !elementId) {
+      return c.json({ success: false, error: 'Project ID dan Element ID wajib disertakan' }, 400);
+    }
+
+    const currentUser = await extractCurrentUser(c);
+    const project = await c.env.DB.prepare(`SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`)
+      .bind(projectId)
+      .first<any>();
+
+    if (project && project.owner_id) {
+      if (!currentUser || currentUser.id !== project.owner_id) {
+        return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses untuk mengubah project ini' }, 403);
+      }
+    }
+
+    await ensureAliasesTable(c.env.DB);
+
+    await c.env.DB.prepare(
+      `DELETE FROM element_aliases WHERE project_id = ? AND element_id = ?;`
+    )
+      .bind(projectId, elementId)
+      .run();
+
+    return c.json({
+      success: true,
+      message: 'Nama elemen berhasil direset ke default',
+      data: { projectId, elementId, displayName: null },
+    });
+  } catch (error: any) {
+    console.error('[Delete Alias Error]', error.message);
+    return c.json({ success: false, error: error.message || 'Gagal mereset alias elemen' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// Secret API Keys & Headless External Analytics Endpoints (v1)
+// -------------------------------------------------------------
+
+let apiKeysTableInitialized = false;
+async function ensureApiKeysTable(db: D1Database) {
+  if (apiKeysTableInitialized) return;
+  try {
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS project_api_keys (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        key_hash TEXT UNIQUE NOT NULL,
+        key_prefix TEXT NOT NULL,
+        name TEXT DEFAULT 'Default Secret Key' NOT NULL,
+        scopes TEXT DEFAULT '["metrics:read"]' NOT NULL,
+        is_active INTEGER DEFAULT 1 NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+        last_used_at TEXT,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+    `).run();
+    await db.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_api_keys_hash 
+      ON project_api_keys (key_hash);
+    `).run();
+    await db.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_api_keys_project 
+      ON project_api_keys (project_id);
+    `).run();
+    apiKeysTableInitialized = true;
+  } catch (err: any) {
+    console.warn('[DB] Failed to ensure project_api_keys table:', err.message);
+  }
+}
+
+async function hashApiKey(key: string): Promise<string> {
+  const enc = new TextEncoder();
+  const digest = await crypto.subtle.digest('SHA-256', enc.encode(key.trim()));
+  return bufferToHex(digest);
+}
+
+function generateSecretKey(): { rawKey: string; keyPrefix: string } {
+  const bytes = new Uint8Array(20);
+  crypto.getRandomValues(bytes);
+  const randomHex = bufferToHex(bytes.buffer);
+  const rawKey = `sk_live_${randomHex}`;
+  const keyPrefix = `${rawKey.slice(0, 12)}...${rawKey.slice(-4)}`;
+  return { rawKey, keyPrefix };
+}
+
+async function authenticateApiKey(c: any, requiredProjectId?: string): Promise<{ success: boolean; projectId?: string; error?: string; status?: number }> {
+  const authHeader = c.req.header('authorization') || '';
+  const headerKey = (c.req.header('x-api-key') || (authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '')).trim();
+
+  if (!headerKey || !headerKey.startsWith('sk_live_')) {
+    return {
+      success: false,
+      error: 'Unauthorized: Header "x-api-key" atau "Authorization: Bearer sk_live_..." wajib disertakan',
+      status: 401,
+    };
+  }
+
+  await ensureApiKeysTable(c.env.DB);
+
+  const hashed = await hashApiKey(headerKey);
+  const record: any = await c.env.DB.prepare(
+    `SELECT id, project_id, is_active FROM project_api_keys WHERE key_hash = ? LIMIT 1;`
+  )
+    .bind(hashed)
+    .first();
+
+  if (!record || !record.is_active) {
+    return {
+      success: false,
+      error: 'Unauthorized: Secret API Key tidak valid atau telah dinonaktifkan',
+      status: 401,
+    };
+  }
+
+  if (requiredProjectId && record.project_id !== requiredProjectId) {
+    return {
+      success: false,
+      error: 'Forbidden: Secret API Key ini tidak memiliki akses ke project yang diminta',
+      status: 403,
+    };
+  }
+
+  // Update last_used_at secara non-blocking
+  if (c.executionCtx && typeof c.executionCtx.waitUntil === 'function') {
+    c.executionCtx.waitUntil(
+      c.env.DB.prepare(`UPDATE project_api_keys SET last_used_at = datetime('now') WHERE id = ?;`).bind(record.id).run().catch(() => {})
+    );
+  }
+
+  return { success: true, projectId: record.project_id };
+}
+
+// 1. Management: GET /api/track/projects/:id/keys (Daftar API Key milik project)
+app.get('/api/track/projects/:id/keys', async (c) => {
+  try {
+    const projectId = c.req.param('id');
+    const currentUser = await extractCurrentUser(c);
+
+    const project = await c.env.DB.prepare(`SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`)
+      .bind(projectId)
+      .first<any>();
+
+    if (!project) {
+      return c.json({ success: false, error: 'Project tidak ditemukan' }, 404);
+    }
+
+    if (project.owner_id) {
+      if (!currentUser || currentUser.id !== project.owner_id) {
+        return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses ke project ini' }, 403);
+      }
+    }
+
+    await ensureApiKeysTable(c.env.DB);
+
+    const { results } = await c.env.DB.prepare(
+      `SELECT id, project_id, key_prefix, name, scopes, is_active, created_at, last_used_at
+       FROM project_api_keys 
+       WHERE project_id = ? 
+       ORDER BY created_at DESC;`
+    )
+      .bind(projectId)
+      .all();
+
+    return c.json({ success: true, projectId, count: results.length, data: results });
+  } catch (err: any) {
+    console.error('[Get API Keys Error]', err.message);
+    return c.json({ success: false, error: 'Gagal memuat API Keys' }, 500);
+  }
+});
+
+// 2. Management: POST /api/track/projects/:id/keys (Generate Secret Key baru)
+app.post('/api/track/projects/:id/keys', async (c) => {
+  try {
+    const projectId = c.req.param('id');
+    const currentUser = await extractCurrentUser(c);
+
+    const project = await c.env.DB.prepare(`SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`)
+      .bind(projectId)
+      .first<any>();
+
+    if (!project) {
+      return c.json({ success: false, error: 'Project tidak ditemukan' }, 404);
+    }
+
+    if (project.owner_id) {
+      if (!currentUser || currentUser.id !== project.owner_id) {
+        return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses untuk membuat API key pada project ini' }, 403);
+      }
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const keyName = (body.name || 'Secret Key').trim().slice(0, 50);
+
+    await ensureApiKeysTable(c.env.DB);
+
+    const { rawKey, keyPrefix } = generateSecretKey();
+    const hashed = await hashApiKey(rawKey);
+    const keyId = 'key_' + Math.random().toString(36).substring(2, 10);
+
+    await c.env.DB.prepare(
+      `INSERT INTO project_api_keys (id, project_id, key_hash, key_prefix, name, scopes, is_active, created_at)
+       VALUES (?, ?, ?, ?, ?, '["metrics:read"]', 1, datetime('now'));`
+    )
+      .bind(keyId, projectId, hashed, keyPrefix, keyName)
+      .run();
+
+    return c.json({
+      success: true,
+      message: 'Secret API Key berhasil dibuat. Salin sekarang karena kunci ini tidak akan ditampilkan lagi!',
+      key: {
+        id: keyId,
+        projectId,
+        name: keyName,
+        rawKey, // Hanya tampil sekali saat dibuat!
+        keyPrefix,
+        createdAt: new Date().toISOString(),
+      },
+    }, 201);
+  } catch (err: any) {
+    console.error('[Create API Key Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal membuat API Key' }, 500);
+  }
+});
+
+// 3. Management: DELETE /api/track/projects/:id/keys/:keyId (Revoke / Hapus API Key)
+app.delete('/api/track/projects/:id/keys/:keyId', async (c) => {
+  try {
+    const projectId = c.req.param('id');
+    const keyId = c.req.param('keyId');
+    const currentUser = await extractCurrentUser(c);
+
+    const project = await c.env.DB.prepare(`SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`)
+      .bind(projectId)
+      .first<any>();
+
+    if (!project) {
+      return c.json({ success: false, error: 'Project tidak ditemukan' }, 404);
+    }
+
+    if (project.owner_id) {
+      if (!currentUser || currentUser.id !== project.owner_id) {
+        return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki izin untuk mencabut API key ini' }, 403);
+      }
+    }
+
+    await ensureApiKeysTable(c.env.DB);
+
+    await c.env.DB.prepare(
+      `DELETE FROM project_api_keys WHERE id = ? AND project_id = ?;`
+    )
+      .bind(keyId, projectId)
+      .run();
+
+    return c.json({
+      success: true,
+      message: 'API Key berhasil dihapus/dicabut secara permanen',
+      deletedKeyId: keyId,
+    });
+  } catch (err: any) {
+    console.error('[Delete API Key Error]', err.message);
+    return c.json({ success: false, error: 'Gagal mencabut API Key' }, 500);
+  }
+});
+
+// Helper deteksi Sistem Operasi (OS) dari User-Agent
+function parseOsFromUa(ua: string | null | undefined): string {
+  if (!ua) return 'Lainnya';
+  const lower = ua.toLowerCase();
+  if (lower.includes('ipad')) return 'iPadOS';
+  if (lower.includes('iphone') || lower.includes('ios')) return 'iOS';
+  if (lower.includes('android')) return 'Android';
+  if (lower.includes('macintosh') || lower.includes('mac os')) return 'macOS';
+  if (lower.includes('windows')) return 'Windows';
+  if (lower.includes('linux') || lower.includes('x11') || lower.includes('ubuntu')) return 'Linux';
+  return 'Lainnya';
+}
+
+// 4. External REST API v1: GET /api/v1/stats (Ringkasan Metrik Cepat untuk Dashboard Luar)
+app.get('/api/v1/stats', async (c) => {
+  try {
+    const requestedProject = c.req.query('projectId');
+    const auth = await authenticateApiKey(c, requestedProject);
+    if (!auth.success) {
+      return c.json({ success: false, error: auth.error }, (auth.status || 401) as any);
+    }
+    const projectId = auth.projectId!;
+
+    await ensureAliasesTable(c.env.DB);
+
+    const stats = await c.env.DB.prepare(
+      `SELECT 
+         COALESCE(SUM(total_clicks), 0) as total_clicks,
+         COUNT(DISTINCT element_id) as total_elements,
+         MAX(last_clicked_at) as last_clicked_at
+       FROM cta_metrics
+       WHERE project_id = ?;`
+    )
+      .bind(projectId)
+      .first<any>();
+
+    const topCta = await c.env.DB.prepare(
+      `SELECT m.element_id, m.page_path, m.total_clicks, m.last_clicked_at, a.display_name
+       FROM cta_metrics m
+       LEFT JOIN element_aliases a ON a.project_id = m.project_id AND a.element_id = m.element_id
+       WHERE m.project_id = ?
+       ORDER BY m.total_clicks DESC
+       LIMIT 1;`
+    )
+      .bind(projectId)
+      .first<any>();
+
+    // Ambil statistik sesi unik & total event klik
+    const eventStats = await c.env.DB.prepare(
+      `SELECT 
+         COUNT(DISTINCT session_id) as unique_sessions,
+         COUNT(id) as total_events
+       FROM click_events
+       WHERE project_id = ?;`
+    )
+      .bind(projectId)
+      .first<any>();
+
+    // Ambil riwayat event terbaru untuk menghitung agregasi OS, Kota, dan Tren 7 hari
+    const { results: recentEvents } = await c.env.DB.prepare(
+      `SELECT user_agent, city, created_at
+       FROM click_events
+       WHERE project_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1000;`
+    )
+      .bind(projectId)
+      .all();
+
+    const osCounts: Record<string, number> = {};
+    const cityCounts: Record<string, number> = {};
+    const days7Counts = [0, 0, 0, 0, 0, 0, 0]; // 0: Min, 1: Sen, 2: Sel, 3: Rab, 4: Kam, 5: Jum, 6: Sab
+
+    recentEvents.forEach((ev: any) => {
+      const os = parseOsFromUa(ev.user_agent);
+      osCounts[os] = (osCounts[os] || 0) + 1;
+
+      if (ev.city && ev.city !== 'Unknown') {
+        cityCounts[ev.city] = (cityCounts[ev.city] || 0) + 1;
+      }
+
+      try {
+        const d = new Date(ev.created_at);
+        const day = d.getDay();
+        if (!isNaN(day)) {
+          days7Counts[day]++;
+        }
+      } catch {}
+    });
+
+    const totalEventsCount = recentEvents.length;
+    const osBreakdown = Object.entries(osCounts)
+      .map(([name, count]) => ({
+        name,
+        count,
+        percentage: totalEventsCount > 0 ? Math.round((count / totalEventsCount) * 100) : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    const topCities = Object.entries(cityCounts)
+      .map(([city, count]) => ({ city, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    const trend7Days = {
+      labels: ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'],
+      data: days7Counts,
+    };
+
+    c.header('Cache-Control', 'public, max-age=10, s-maxage=15');
+
+    return c.json({
+      success: true,
+      projectId,
+      data: {
+        totalClicks: Number(stats?.total_clicks || 0),
+        uniqueSessions: Number(eventStats?.unique_sessions || 0),
+        activeElements: Number(stats?.total_elements || 0),
+        lastActivity: stats?.last_clicked_at || null,
+        topPerformingCta: topCta ? {
+          elementId: topCta.element_id,
+          displayName: topCta.display_name || null,
+          totalClicks: Number(topCta.total_clicks || 0),
+          pagePath: topCta.page_path,
+          lastClickedAt: topCta.last_clicked_at,
+        } : null,
+        osBreakdown,
+        topCities,
+        trend7Days,
+      },
+      meta: {
+        version: 'v1',
+        serverTime: new Date().toISOString(),
+      },
+    });
+  } catch (err: any) {
+    console.error('[API v1 Stats Error]', err.message);
+    return c.json({ success: false, error: 'Gagal memuat ringkasan stats proyek' }, 500);
+  }
+});
+
+// 5. External REST API v1: GET /api/v1/metrics (Daftar Metrik Tombol Lengkap)
+app.get('/api/v1/metrics', async (c) => {
+  try {
+    const requestedProject = c.req.query('projectId');
+    const auth = await authenticateApiKey(c, requestedProject);
+    if (!auth.success) {
+      return c.json({ success: false, error: auth.error }, (auth.status || 401) as any);
+    }
+    const projectId = auth.projectId!;
+
+    const limitParam = parseInt(c.req.query('limit') || '100', 10);
+    const limit = isNaN(limitParam) ? 100 : Math.min(Math.max(limitParam, 1), 200);
+
+    await ensureAliasesTable(c.env.DB);
+
+    const { results } = await c.env.DB.prepare(
+      `SELECT m.element_id, m.page_path, m.total_clicks, m.last_clicked_at, a.display_name
+       FROM cta_metrics m
+       LEFT JOIN element_aliases a ON a.project_id = m.project_id AND a.element_id = m.element_id
+       WHERE m.project_id = ?
+       ORDER BY m.total_clicks DESC, m.last_clicked_at DESC
+       LIMIT ?;`
+    )
+      .bind(projectId, limit)
+      .all();
+
+    c.header('Cache-Control', 'public, max-age=10, s-maxage=15');
+
+    const formatted = results.map((row: any) => ({
+      elementId: row.element_id,
+      displayName: row.display_name || null,
+      pagePath: row.page_path,
+      totalClicks: Number(row.total_clicks || 0),
+      lastClickedAt: row.last_clicked_at,
+    }));
+
+    return c.json({
+      success: true,
+      projectId,
+      count: formatted.length,
+      data: formatted,
+    });
+  } catch (err: any) {
+    console.error('[API v1 Metrics Error]', err.message);
+    return c.json({ success: false, error: 'Gagal memuat metrik tombol' }, 500);
+  }
+});
+
+// 6. External REST API v1: GET /api/v1/events (Log Event Mentah)
+app.get('/api/v1/events', async (c) => {
+  try {
+    const requestedProject = c.req.query('projectId');
+    const auth = await authenticateApiKey(c, requestedProject);
+    if (!auth.success) {
+      return c.json({ success: false, error: auth.error }, (auth.status || 401) as any);
+    }
+    const projectId = auth.projectId!;
+
+    const limitParam = parseInt(c.req.query('limit') || '50', 10);
+    const limit = isNaN(limitParam) ? 50 : Math.min(Math.max(limitParam, 1), 100);
+
+    await ensureAliasesTable(c.env.DB);
+
+    const { results } = await c.env.DB.prepare(
+      `SELECT CAST(e.id AS TEXT) as id, e.element_id, e.page_path, e.session_id, e.user_agent, e.country, e.city, e.created_at, a.display_name
+       FROM click_events e
+       LEFT JOIN element_aliases a ON a.project_id = e.project_id AND a.element_id = e.element_id
+       WHERE e.project_id = ?
+       ORDER BY e.created_at DESC
+       LIMIT ?;`
+    )
+      .bind(projectId, limit)
+      .all();
+
+    const formatted = results.map((row: any) => ({
+      id: row.id,
+      elementId: row.element_id,
+      displayName: row.display_name || null,
+      pagePath: row.page_path,
+      sessionId: row.session_id || null,
+      os: parseOsFromUa(row.user_agent),
+      geo: {
+        country: row.country || 'ID',
+        city: row.city || 'Unknown',
+      },
+      createdAt: row.created_at,
+    }));
+
+    return c.json({
+      success: true,
+      projectId,
+      count: formatted.length,
+      data: formatted,
+    });
+  } catch (err: any) {
+    console.error('[API v1 Events Error]', err.message);
+    return c.json({ success: false, error: 'Gagal memuat log events' }, 500);
+  }
+});
+
+// 7. External REST API v1: GET /api/v1/export (Ekspor CSV / JSON)
+app.get('/api/v1/export', async (c) => {
+  try {
+    const requestedProject = c.req.query('projectId');
+    const auth = await authenticateApiKey(c, requestedProject);
+    if (!auth.success) {
+      return c.json({ success: false, error: auth.error }, (auth.status || 401) as any);
+    }
+    const projectId = auth.projectId!;
+
+    await ensureAliasesTable(c.env.DB);
+
+    const { results } = await c.env.DB.prepare(
+      `SELECT m.element_id, m.page_path, m.total_clicks, m.last_clicked_at, a.display_name
+       FROM cta_metrics m
+       LEFT JOIN element_aliases a ON a.project_id = m.project_id AND a.element_id = m.element_id
+       WHERE m.project_id = ?
+       ORDER BY m.total_clicks DESC;`
+    )
+      .bind(projectId)
+      .all();
+
+    const format = (c.req.query('format') || 'csv').toLowerCase();
+
+    if (format === 'json') {
+      return c.json({ success: true, projectId, data: results });
+    }
+
+    const headers = ['element_id', 'display_name', 'page_path', 'total_clicks', 'last_clicked_at'];
+    const rows = results.map((r: any) => [
+      `"${String(r.element_id).replace(/"/g, '""')}"`,
+      `"${String(r.display_name || '').replace(/"/g, '""')}"`,
+      `"${String(r.page_path).replace(/"/g, '""')}"`,
+      r.total_clicks,
+      `"${String(r.last_clicked_at)}"`,
+    ].join(','));
+
+    const csvContent = [headers.join(','), ...rows].join('\n');
+
+    c.header('Content-Type', 'text/csv; charset=utf-8');
+    c.header('Content-Disposition', `attachment; filename="firenalytics_${projectId}_metrics.csv"`);
+    return c.body(csvContent);
+  } catch (err: any) {
+    console.error('[API v1 Export Error]', err.message);
+    return c.json({ success: false, error: 'Gagal mengekspor data' }, 500);
   }
 });
 

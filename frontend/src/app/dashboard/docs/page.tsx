@@ -19,6 +19,9 @@ import {
   Share2,
   Sparkles,
   SlidersHorizontal,
+  Lock,
+  Server,
+  Key,
 } from 'lucide-react';
 
 interface FrameworkGuide {
@@ -106,10 +109,52 @@ const FRAMEWORK_GUIDES: FrameworkGuide[] = [
   },
 ];
 
+function getApiSnippet(lang: 'js' | 'curl' | 'python' | 'php'): string {
+  switch (lang) {
+    case 'curl':
+      return `curl -X GET "https://traffic-analytics-api.fireup-dist.workers.dev/api/v1/metrics?projectId=PROJECT_ID_ANDA" \\
+  -H "x-api-key: sk_live_your_secret_key_here"`;
+    case 'python':
+      return `import requests
+
+url = "https://traffic-analytics-api.fireup-dist.workers.dev/api/v1/stats?projectId=PROJECT_ID_ANDA"
+headers = {
+    "x-api-key": "sk_live_your_secret_key_here"
+}
+
+response = requests.get(url, headers=headers).json()
+print("Total Klik:", response["data"]["totalClicks"])
+print("Top CTA:", response["data"]["topPerformingCta"])`;
+    case 'php':
+      return `use Illuminate\\Support\\Facades\\Http;
+
+$response = Http::withHeaders([
+    'x-api-key' => 'sk_live_your_secret_key_here',
+])->get('https://traffic-analytics-api.fireup-dist.workers.dev/api/v1/metrics', [
+    'projectId' => 'PROJECT_ID_ANDA',
+]);
+
+$metrics = $response->json();`;
+    case 'js':
+    default:
+      return `// Contoh di Node.js / Next.js / Express
+const res = await fetch('https://traffic-analytics-api.fireup-dist.workers.dev/api/v1/metrics?projectId=PROJECT_ID_ANDA', {
+  headers: {
+    'x-api-key': 'sk_live_your_secret_key_here',
+  },
+});
+
+const { data } = await res.json();
+console.log('Metrik Tombol:', data);`;
+  }
+}
+
 export default function DocsPage() {
   const [selectedTab, setSelectedTab] = useState(FRAMEWORK_GUIDES[0].id);
   const [trackingMode, setTrackingMode] = useState<'smart' | 'manual'>('smart');
   const [copied, setCopied] = useState(false);
+  const [selectedApiLang, setSelectedApiLang] = useState<'js' | 'curl' | 'python' | 'php'>('js');
+  const [copiedApi, setCopiedApi] = useState(false);
 
   const activeGuide = FRAMEWORK_GUIDES.find((g) => g.id === selectedTab) || FRAMEWORK_GUIDES[0];
   const codeToDisplay = activeGuide.getCode(trackingMode === 'smart');
@@ -414,6 +459,130 @@ export default function DocsPage() {
 </button>`}
             </pre>
           </div>
+        </div>
+      </div>
+
+      {/* Langkah 3: Integrasi Data Eksternal (Headless REST API) */}
+      <div id="api" className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="space-y-1">
+            <h2 className="text-sm font-semibold text-zinc-900 flex items-center gap-2">
+              <span className="w-5 h-5 rounded-full bg-zinc-900 text-white flex items-center justify-center text-[10px] font-bold">3</span>
+              <span>Integrasi REST API Eksternal (Headless Analytics)</span>
+            </h2>
+            <p className="text-xs text-zinc-500">
+              Tarik data performa tombol dan event tracking langsung ke dashboard di aplikasi lain milik Anda (Laravel, Node.js, Python, Flutter).
+            </p>
+          </div>
+          <Link
+            href="/dashboard/projects"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 transition-colors shadow-xs"
+          >
+            <Lock className="w-3.5 h-3.5" />
+            <span>Kelola Secret Key di Proyek</span>
+          </Link>
+        </div>
+
+        {/* Tabel Endpoint Reference */}
+        <div className="overflow-x-auto border border-zinc-200 rounded-lg">
+          <table className="w-full text-left text-xs text-zinc-700">
+            <thead className="text-[11px] uppercase tracking-wider bg-zinc-50 text-zinc-500 border-b border-zinc-200">
+              <tr>
+                <th className="px-4 py-2.5 font-semibold">Metode</th>
+                <th className="px-4 py-2.5 font-semibold">Endpoint</th>
+                <th className="px-4 py-2.5 font-semibold">Deskripsi</th>
+                <th className="px-4 py-2.5 font-semibold">Otentikasi</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-200 bg-white text-xs">
+              <tr>
+                <td className="px-4 py-2.5 font-mono font-bold text-emerald-700">GET</td>
+                <td className="px-4 py-2.5 font-mono text-zinc-900">/api/v1/stats?projectId=...</td>
+                <td className="px-4 py-2.5 text-zinc-600">Ringkasan cepat (total klik, elemen aktif, top performing CTA)</td>
+                <td className="px-4 py-2.5 font-mono text-[11px] text-zinc-500">Header x-api-key</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-2.5 font-mono font-bold text-emerald-700">GET</td>
+                <td className="px-4 py-2.5 font-mono text-zinc-900">/api/v1/metrics?projectId=...</td>
+                <td className="px-4 py-2.5 text-zinc-600">Daftar lengkap tombol, nama ramah/kustom, dan total klik</td>
+                <td className="px-4 py-2.5 font-mono text-[11px] text-zinc-500">Header x-api-key</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-2.5 font-mono font-bold text-emerald-700">GET</td>
+                <td className="px-4 py-2.5 font-mono text-zinc-900">/api/v1/events?projectId=...&amp;limit=50</td>
+                <td className="px-4 py-2.5 text-zinc-600">Log mentah klik pengunjung real-time (maksimal 100 baris)</td>
+                <td className="px-4 py-2.5 font-mono text-[11px] text-zinc-500">Header x-api-key</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-2.5 font-mono font-bold text-emerald-700">GET</td>
+                <td className="px-4 py-2.5 font-mono text-zinc-900">/api/v1/export?projectId=...&amp;format=csv</td>
+                <td className="px-4 py-2.5 text-zinc-600">Ekspor langsung dalam format spreadsheet CSV atau JSON</td>
+                <td className="px-4 py-2.5 font-mono text-[11px] text-zinc-500">Header x-api-key</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* Tab Bahasa Pemrograman & Code Snippet */}
+        <div className="space-y-3 pt-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 p-1 bg-zinc-100 rounded-lg text-xs">
+              <button
+                type="button"
+                onClick={() => setSelectedApiLang('js')}
+                className={`px-3 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                  selectedApiLang === 'js' ? 'bg-white text-zinc-900 shadow-xs font-semibold' : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                JavaScript / Node.js
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedApiLang('curl')}
+                className={`px-3 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                  selectedApiLang === 'curl' ? 'bg-white text-zinc-900 shadow-xs font-semibold' : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                cURL (Terminal)
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedApiLang('python')}
+                className={`px-3 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                  selectedApiLang === 'python' ? 'bg-white text-zinc-900 shadow-xs font-semibold' : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                Python
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedApiLang('php')}
+                className={`px-3 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                  selectedApiLang === 'php' ? 'bg-white text-zinc-900 shadow-xs font-semibold' : 'text-zinc-600 hover:text-zinc-900'
+                }`}
+              >
+                PHP (Laravel)
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const code = getApiSnippet(selectedApiLang);
+                navigator.clipboard.writeText(code);
+                setCopiedApi(true);
+                setTimeout(() => setCopiedApi(false), 2000);
+              }}
+              className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium flex items-center gap-1.5 cursor-pointer shadow-xs"
+            >
+              {copiedApi ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedApi ? 'Kode Tersalin!' : 'Salin Kode'}</span>
+            </button>
+          </div>
+
+          <pre className="p-4 rounded-xl bg-zinc-900 text-zinc-100 font-mono text-xs overflow-x-auto leading-relaxed border border-zinc-800">
+            {getApiSnippet(selectedApiLang)}
+          </pre>
         </div>
       </div>
 

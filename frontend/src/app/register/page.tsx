@@ -197,9 +197,17 @@ export default function RegisterPage() {
               {password && (
                 <div className="mt-2 space-y-1.5">
                   <div className="flex gap-1.5 h-1">
-                    <div className={`flex-1 rounded-full ${passwordStrength.score >= 1 ? passwordStrength.color : 'bg-zinc-200'}`} />
-                    <div className={`flex-1 rounded-full ${passwordStrength.score >= 2 ? passwordStrength.color : 'bg-zinc-200'}`} />
-                    <div className={`flex-1 rounded-full ${passwordStrength.score >= 3 ? passwordStrength.color : 'bg-zinc-200'}`} />
+                    {[1, 2, 3].map((level) => {
+                      const isMet = passwordStrength.score >= level;
+                      const activeColor = passwordStrength.color;
+                      const barColor = isMet ? activeColor : 'bg-zinc-200';
+                      return (
+                        <div
+                          key={level}
+                          className={`flex-1 rounded-full transition-colors ${barColor}`}
+                        />
+                      );
+                    })}
                   </div>
                   <div className="text-[10px] text-zinc-500 flex justify-between">
                     <span>Kekuatan kata sandi</span>
