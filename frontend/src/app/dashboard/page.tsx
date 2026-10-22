@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import MetricsLiveTable, { MetricRow, MetricsLiveTableProps } from '@/components/analytics/MetricsLiveTable';
 import AnalyticsChartJsDemo, { ClickEventRow } from '@/components/analytics/AnalyticsChartJsDemo';
 import Link from 'next/link';
@@ -10,11 +10,13 @@ import {
   Plus,
   CheckCircle2,
   ShieldCheck,
-  Zap,
-  Database,
   FolderOpen,
   RotateCw,
+  MousePointerClick,
+  TrendingUp,
+  Clock,
 } from 'lucide-react';
+import { resolveElementName } from '@/lib/elementNaming';
 
 interface ProjectOption {
   id: string;
@@ -120,6 +122,29 @@ export default function DashboardOverviewPage() {
 
   const activeProject = projects.find((p) => p.id === selectedProject);
 
+  // 3. Kalkulasi Ringkasan KPI Dinamis (Real-Time)
+  const { totalAllClicks, activeElementsCount, topCta, topResolvedName } = useMemo(() => {
+    let sum = 0;
+    let top: MetricRow | null = null;
+
+    for (const m of metrics) {
+      const count = Number(m.total_clicks) || 0;
+      sum += count;
+      if (!top || count > (Number(top.total_clicks) || 0)) {
+        top = m;
+      }
+    }
+
+    const topResolved = top ? resolveElementName(top.element_id, top.display_name) : null;
+
+    return {
+      totalAllClicks: sum,
+      activeElementsCount: metrics.length,
+      topCta: top as MetricRow | null,
+      topResolvedName: topResolved?.displayName || '-',
+    };
+  }, [metrics]);
+
   return (
     <div className="space-y-6">
       {/* Top Banner / Welcome & Global Project Selector */}
@@ -170,53 +195,62 @@ export default function DashboardOverviewPage() {
         </div>
       </div>
 
-      {/* KPI Highlight Cards */}
+      {/* KPI Highlight Summary Cards (Dinamis Real-Time) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
-          <div className="text-zinc-500 text-xs font-medium flex items-center justify-between">
-            <span>Metode Pengiriman</span>
-            <Zap className="w-4 h-4 text-zinc-400" />
+        {/* Card 1: Total Klik Terkumpul */}
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs space-y-1">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-medium">Total Klik Terkumpul</span>
+            <MousePointerClick className="w-4 h-4 text-zinc-400" />
           </div>
-          <div className="text-lg font-bold text-zinc-900 mt-1 flex items-center gap-2">
-            <span>Beacon API</span>
-            <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-              Active
-            </span>
+          <div className="text-2xl font-black text-zinc-900 tracking-tight">
+            {loading && metrics.length === 0 ? '...' : totalAllClicks.toLocaleString('id-ID')}
           </div>
-          <div className="text-[11px] text-zinc-500 pt-1">Fallback otomatis ke Keepalive Fetch</div>
+          <div className="text-[11px] text-zinc-500 flex items-center gap-1.5 pt-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span>Teragregasi real-time</span>
+          </div>
         </div>
 
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
-          <div className="text-zinc-500 text-xs font-medium flex items-center justify-between">
-            <span>Respons Backend</span>
-            <CheckCircle2 className="w-4 h-4 text-zinc-400" />
+        {/* Card 2: Elemen CTA Aktif */}
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs space-y-1">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-medium">Elemen CTA Aktif</span>
+            <TrendingUp className="w-4 h-4 text-zinc-400" />
           </div>
-          <div className="text-lg font-bold text-zinc-900 mt-1">
-            204 No Content
+          <div className="text-2xl font-black text-zinc-900 tracking-tight">
+            {loading && metrics.length === 0 ? '...' : activeElementsCount}
           </div>
-          <div className="text-[11px] text-zinc-500 pt-1">Non-blocking / 0ms client wait time</div>
+          <div className="text-[11px] text-zinc-500 pt-1">Tombol atau link terpantau</div>
         </div>
 
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
-          <div className="text-zinc-500 text-xs font-medium flex items-center justify-between">
-            <span>Model Agregasi</span>
-            <Database className="w-4 h-4 text-zinc-400" />
+        {/* Card 3: Top Performing CTA */}
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs space-y-1">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-medium">Top Performing CTA</span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
           </div>
-          <div className="text-lg font-bold text-zinc-900 mt-1">
-            Atomic UPSERT
+          <div className="text-sm font-bold text-zinc-900 truncate" title={topResolvedName}>
+            {topResolvedName}
           </div>
-          <div className="text-[11px] text-zinc-500 pt-1">Cloudflare D1 ON CONFLICT UPDATE</div>
+          <div className="text-[11px] text-zinc-500 pt-1">
+            {topCta ? `${topCta.total_clicks} klik tercatat` : 'Belum ada data'}
+          </div>
         </div>
 
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
-          <div className="text-zinc-500 text-xs font-medium flex items-center justify-between">
-            <span>Privasi Pengunjung</span>
-            <ShieldCheck className="w-4 h-4 text-zinc-400" />
+        {/* Card 4: Sinkronisasi Terakhir */}
+        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs space-y-1">
+          <div className="flex items-center justify-between text-zinc-500">
+            <span className="text-xs font-medium">Sinkronisasi Terakhir</span>
+            <Clock className="w-4 h-4 text-zinc-400" />
           </div>
-          <div className="text-lg font-bold text-zinc-900 mt-1">
-            IP Masking
+          <div className="text-sm font-bold text-zinc-900 font-mono">
+            {lastRefreshed ? lastRefreshed.toLocaleTimeString('id-ID') : '-'}
           </div>
-          <div className="text-[11px] text-zinc-500 pt-1">GDPR &amp; Standar UU PDP</div>
+          <div className="text-[11px] text-zinc-500 flex items-center gap-1.5 pt-1">
+            <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
+            <span>Smart Polling Aktif</span>
+          </div>
         </div>
       </div>
 

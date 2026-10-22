@@ -6,11 +6,7 @@ import {
   RotateCw, 
   Search, 
   MousePointerClick, 
-  Clock, 
-  CheckCircle2, 
   ShieldCheck,
-  TrendingUp,
-  FolderOpen,
   Pencil,
   Tag,
   X,
@@ -282,19 +278,13 @@ export function MetricsLiveTable({
     }
   };
 
-  // Kalkulasi Ringkasan KPI
-  const { totalAllClicks, maxClicks, topCta, filteredMetrics } = useMemo(() => {
-    let sum = 0;
+  // Kalkulasi maxClicks dan filteredMetrics
+  const { maxClicks, filteredMetrics } = useMemo(() => {
     let max = 1;
-    let top: MetricRow | null = null;
 
     metrics.forEach((m) => {
       const count = Number(m.total_clicks) || 0;
-      sum += count;
       if (count > max) max = count;
-      if (!top || count > (Number(top.total_clicks) || 0)) {
-        top = m;
-      }
     });
 
     const filtered = metrics.filter((m) => {
@@ -307,67 +297,13 @@ export function MetricsLiveTable({
       );
     });
 
-    return { totalAllClicks: sum, maxClicks: max, topCta: top, filteredMetrics: filtered };
+    return { maxClicks: max, filteredMetrics: filtered };
   }, [metrics, searchQuery]);
-
-  const topRow = topCta as MetricRow | null;
-  const topResolved = topRow ? resolveElementName(topRow.element_id, topRow.display_name) : null;
 
   return (
     <div className="space-y-6">
-      {/* KPI Highlight Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
-          <div className="flex items-center justify-between text-zinc-500">
-            <span className="text-xs font-medium">Total Klik Terkumpul</span>
-            <MousePointerClick className="w-4 h-4 text-zinc-400" />
-          </div>
-          <div className="text-2xl font-black text-zinc-900 tracking-tight">{totalAllClicks}</div>
-          <div className="text-[11px] text-zinc-500 flex items-center gap-1 pt-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            <span>Teragregasi real-time</span>
-          </div>
-        </div>
-
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
-          <div className="flex items-center justify-between text-zinc-500">
-            <span className="text-xs font-medium">Elemen CTA Aktif</span>
-            <TrendingUp className="w-4 h-4 text-zinc-400" />
-          </div>
-          <div className="text-2xl font-black text-zinc-900 tracking-tight">{metrics.length}</div>
-          <div className="text-[11px] text-zinc-500">Tombol atau link terpantau</div>
-        </div>
-
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
-          <div className="flex items-center justify-between text-zinc-500">
-            <span className="text-xs font-medium">Top Performing CTA</span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-          </div>
-          <div className="text-sm font-bold text-zinc-900 truncate" title={topResolved?.displayName || '-'}>
-            {topResolved?.displayName || '-'}
-          </div>
-          <div className="text-[11px] text-zinc-500">
-            {topCta ? `${(topCta as any).total_clicks} klik tercatat` : 'Belum ada data'}
-          </div>
-        </div>
-
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-sm space-y-1">
-          <div className="flex items-center justify-between text-zinc-500">
-            <span className="text-xs font-medium">Sinkronisasi Terakhir</span>
-            <Clock className="w-4 h-4 text-zinc-400" />
-          </div>
-          <div className="text-sm font-bold text-zinc-900 font-mono">
-            {lastRefreshed ? lastRefreshed.toLocaleTimeString('id-ID') : '-'}
-          </div>
-          <div className="text-[11px] text-zinc-500 flex items-center gap-1">
-            <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
-            <span>Smart Polling Aktif</span>
-          </div>
-        </div>
-      </div>
-
       {/* Main Table Card */}
-      <div className="bg-white border border-zinc-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="bg-white border border-zinc-200 rounded-xl shadow-xs overflow-hidden">
         {/* Table Control Header */}
         <div className="p-5 border-b border-zinc-200 flex flex-wrap items-center justify-between gap-4 bg-white">
           <div className="space-y-1">
@@ -376,27 +312,11 @@ export function MetricsLiveTable({
               <h2 className="text-base font-bold text-zinc-900">Performa Metrik CTA Real-Time</h2>
             </div>
             <p className="text-xs text-zinc-500">
-              Data klik terisolasi per proyek dan disimpan pada Cloudflare D1.
+              Data agregasi klik CTA dan konversi per halaman web.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* Project Selector */}
-            <div className="flex items-center gap-1.5 bg-zinc-50 border border-zinc-200 rounded-lg px-2.5 py-1.5">
-              <FolderOpen className="w-3.5 h-3.5 text-zinc-500" />
-              <select
-                value={selectedProject}
-                onChange={(e) => handleSelectProject(e.target.value)}
-                className="bg-transparent text-xs font-semibold text-zinc-800 focus:outline-none cursor-pointer"
-              >
-                {projects.map((proj) => (
-                  <option key={proj.id} value={proj.id}>
-                    {proj.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
+          <div className="flex items-center gap-2.5">
             {/* Search Filter */}
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
@@ -405,7 +325,7 @@ export function MetricsLiveTable({
                 placeholder="Cari tombol..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-40 sm:w-48 pl-8 pr-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-400 focus:bg-white transition-all font-mono"
+                className="w-48 sm:w-60 pl-8 pr-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-lg text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-400 focus:bg-white transition-all font-mono"
               />
             </div>
           </div>
