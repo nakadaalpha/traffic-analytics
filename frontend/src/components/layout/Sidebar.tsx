@@ -12,7 +12,8 @@ import {
   ChevronRight, 
   ArrowUpRight,
   Menu,
-  X
+  X,
+  Share2
 } from 'lucide-react';
 
 export function Sidebar() {
@@ -29,6 +30,11 @@ export function Sidebar() {
       name: 'Event Logs',
       href: '/dashboard/events',
       icon: FileText,
+    },
+    {
+      name: 'Social Media Engine',
+      href: '/dashboard/social',
+      icon: Share2,
     },
     {
       name: 'Manajemen Project',

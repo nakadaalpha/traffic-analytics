@@ -101,4 +101,37 @@ CREATE TABLE IF NOT EXISTS project_api_keys (
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON project_api_keys (key_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_project ON project_api_keys (project_id);
 
+-- 7. Tabel social_connections: Menyimpan akun medsos (YouTube, Twitter/X, Instagram, dll) yang terhubung via Composio
+CREATE TABLE IF NOT EXISTS social_connections (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    platform TEXT NOT NULL, -- 'youtube', 'twitter', 'instagram'
+    composio_connection_id TEXT NOT NULL,
+    account_handle TEXT,
+    status TEXT DEFAULT 'ACTIVE' NOT NULL, -- 'ACTIVE', 'EXPIRED', 'REVOKED'
+    last_synced_at TEXT,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_conn_user ON social_connections (user_id);
+CREATE INDEX IF NOT EXISTS idx_social_conn_platform ON social_connections (platform);
+
+-- 8. Tabel social_metrics_history: Log metrik berkala (daily time-series snapshot data) untuk visualisasi tren analitik
+CREATE TABLE IF NOT EXISTS social_metrics_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    connection_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    metric_type TEXT NOT NULL, -- 'followers', 'subscribers', 'views', 'posts_count'
+    metric_value REAL NOT NULL,
+    snapshot_date TEXT NOT NULL, -- 'YYYY-MM-DD'
+    raw_payload TEXT, -- JSON response data snapshot dari Composio
+    recorded_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (connection_id) REFERENCES social_connections(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_metrics_conn_time 
+    ON social_metrics_history (connection_id, recorded_at DESC);
+
+
 

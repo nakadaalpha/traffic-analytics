@@ -33,8 +33,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshUser = useCallback(async () => {
     try {
-      // Prioritaskan cek cookie via /api/auth/me
+      const headers: Record<string, string> = {};
+      const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      // Prioritaskan cek cookie atau Bearer token via /api/auth/me
       const res = await fetch('/api/auth/me', {
+        headers,
         credentials: 'include',
       });
       if (res.ok) {

@@ -38,7 +38,7 @@ export default function LoginPage() {
 
       if (res.ok && data.success) {
         login({ token: data.token, user: data.data });
-        router.push('/dashboard');
+        window.location.href = '/dashboard';
       } else {
         setError(data.error || 'Email/username atau kata sandi tidak valid');
       }

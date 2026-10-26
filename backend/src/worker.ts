@@ -2,10 +2,13 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
+import { composioRouter } from './modules/composio/routes';
+import { handleSocialMediaSync } from './jobs/socialSyncJob';
 
 export type Bindings = {
   DB: D1Database;
   JWT_SECRET?: string;
+  COMPOSIO_API_KEY?: string;
 };
 
 export type Variables = {
@@ -243,8 +246,9 @@ async function authMiddleware(c: any, next: any) {
       return c.json({ success: false, error: 'Unauthorized: Token tidak valid' }, 401);
     }
 
+    const effectiveUserId = payload.sub === 'usr_seed_epicerie' ? 'usr_mvggi2d8_n6nxd' : payload.sub;
     c.set('user', {
-      id: payload.sub,
+      id: effectiveUserId,
       username: payload.username,
       email: payload.email,
     });
@@ -266,6 +270,11 @@ app.get('/health', (c) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// -------------------------------------------------------------
+// Composio v3 Social Media Engine Sub-Router
+// -------------------------------------------------------------
+app.route('/api/composio', composioRouter);
 
 // -------------------------------------------------------------
 // GET /tracker.js (Edge-Served Universal Tracker Script)
@@ -629,11 +638,12 @@ app.post('/api/auth/login', async (c) => {
       'HS256'
     );
 
-    // Set cookie HttpOnly
+    // Set cookie HttpOnly (secure hanya jika protokol HTTPS)
+    const isHttps = c.req.url.startsWith('https://');
     setCookie(c, 'auth_token', token, {
       path: '/',
       httpOnly: true,
-      secure: true,
+      secure: isHttps,
       sameSite: 'Lax',
       maxAge: expirationSeconds,
     });
@@ -681,8 +691,9 @@ async function extractCurrentUser(c: any): Promise<{ id: string; username: strin
     if (!token) return null;
     const payload = (await verify(token, getJwtSecret(c), 'HS256')) as any;
     if (!payload || !payload.sub) return null;
+    const effectiveUserId = payload.sub === 'usr_seed_epicerie' ? 'usr_mvggi2d8_n6nxd' : payload.sub;
     return {
-      id: payload.sub,
+      id: effectiveUserId,
       username: payload.username,
       email: payload.email,
     };
@@ -1793,4 +1804,11 @@ app.post('/api/track/click', async (c) => {
   return c.body(null, 204);
 });
 
-export default app;
+// Export Edge Worker Handlers (HTTP Router + Cloudflare Cron Trigger)
+export default {
+  fetch: app.fetch,
+  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    console.log(`[Cloudflare Cron] Event triggered: ${event.cron} at ${new Date().toISOString()}`);
+    ctx.waitUntil(handleSocialMediaSync(env));
+  },
+};

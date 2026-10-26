@@ -7,3 +7,7 @@ compatibility_flags = ["nodejs_compat"]
 binding = "DB"
 database_name = "traffic_analytics_db"
 database_id = "3e7b6518-8ad8-4030-8677-c58f8c5460cf"
+
+[triggers]
+crons = ["0 */12 * * *"]
+

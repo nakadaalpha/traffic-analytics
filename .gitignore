@@ -15,6 +15,7 @@ dist/
 build/
 .next/
 out/
+.wrangler/
 
 # Logs
 npm-debug.log*
