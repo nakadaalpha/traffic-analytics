@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS click_events (
     ip_address TEXT NOT NULL,
     country TEXT DEFAULT 'ID',
     city TEXT DEFAULT 'Unknown',
+    referrer TEXT,
+    utm_source TEXT,
+    utm_medium TEXT,
+    utm_campaign TEXT,
+    social_platform TEXT,
     created_at TEXT DEFAULT (datetime('now')) NOT NULL,
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
@@ -56,6 +61,9 @@ CREATE INDEX IF NOT EXISTS idx_click_events_project_time
 
 CREATE INDEX IF NOT EXISTS idx_click_events_project_element 
     ON click_events (project_id, element_id, page_path);
+
+CREATE INDEX IF NOT EXISTS idx_click_events_social 
+    ON click_events (project_id, social_platform, created_at DESC);
 
 -- 4. Tabel cta_metrics: Ringkasan agregasi klik atomic
 CREATE TABLE IF NOT EXISTS cta_metrics (
@@ -155,6 +163,28 @@ CREATE TABLE IF NOT EXISTS social_posts (
 CREATE INDEX IF NOT EXISTS idx_social_posts_conn ON social_posts (connection_id);
 CREATE INDEX IF NOT EXISTS idx_social_posts_platform ON social_posts (platform);
 CREATE INDEX IF NOT EXISTS idx_social_posts_published ON social_posts (published_at DESC);
+
+-- 10. Tabel social_campaign_links: Generator & pelacak Link-in-Bio / kampanye media sosial
+CREATE TABLE IF NOT EXISTS social_campaign_links (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    platform TEXT NOT NULL, -- 'instagram', 'tiktok', 'youtube', 'facebook', 'twitter', 'custom'
+    title TEXT NOT NULL,
+    target_url TEXT NOT NULL,
+    utm_source TEXT NOT NULL,
+    utm_medium TEXT DEFAULT 'bio' NOT NULL,
+    utm_campaign TEXT NOT NULL,
+    tracked_url TEXT NOT NULL,
+    clicks_count INTEGER DEFAULT 0 NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_links_user ON social_campaign_links (user_id);
+CREATE INDEX IF NOT EXISTS idx_social_links_project ON social_campaign_links (project_id);
+CREATE INDEX IF NOT EXISTS idx_social_links_platform ON social_campaign_links (platform);
 
 
 

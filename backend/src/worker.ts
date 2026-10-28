@@ -315,8 +315,10 @@ app.get('/tracker.js', (c) => {
   // Opsi Smart Auto-Capture (Aktif secara default)
   var autoCaptureEnabled = currentScript.getAttribute('data-auto-capture') !== 'false';
 
-  // Sesi unik browser
+  // Sesi unik browser & atribusi media sosial (Link-in-Bio / UTM)
   var STORAGE_KEY = 'cta_session_id';
+  var ATTR_KEY = 'cta_attr_data';
+
   function getSessionId() {
     try {
       var sess = window.sessionStorage.getItem(STORAGE_KEY);
@@ -328,6 +330,53 @@ app.get('/tracker.js', (c) => {
     } catch (e) {
       return 'sess_' + Date.now();
     }
+  }
+
+  function getAttribution() {
+    try {
+      var cached = window.sessionStorage.getItem(ATTR_KEY);
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    } catch (e) {}
+
+    var params = new URLSearchParams(window.location.search || '');
+    var utmSource = (params.get('utm_source') || '').toLowerCase().trim();
+    var utmMedium = (params.get('utm_medium') || '').toLowerCase().trim();
+    var utmCampaign = (params.get('utm_campaign') || '').toLowerCase().trim();
+    var ref = document.referrer || '';
+    var refLower = ref.toLowerCase();
+
+    var platform = null;
+    if (utmSource === 'tiktok' || refLower.indexOf('tiktok.com') !== -1) {
+      platform = 'tiktok';
+    } else if (utmSource === 'instagram' || refLower.indexOf('instagram.com') !== -1 || refLower.indexOf('l.instagram.com') !== -1) {
+      platform = 'instagram';
+    } else if (utmSource === 'youtube' || refLower.indexOf('youtube.com') !== -1 || refLower.indexOf('youtu.be') !== -1) {
+      platform = 'youtube';
+    } else if (utmSource === 'facebook' || refLower.indexOf('facebook.com') !== -1 || refLower.indexOf('fb.com') !== -1) {
+      platform = 'facebook';
+    } else if (utmSource === 'twitter' || utmSource === 'x' || refLower.indexOf('twitter.com') !== -1 || refLower.indexOf('t.co') !== -1 || refLower.indexOf('x.com') !== -1) {
+      platform = 'twitter';
+    } else if (utmSource === 'threads' || refLower.indexOf('threads.net') !== -1) {
+      platform = 'threads';
+    } else if (utmSource) {
+      platform = utmSource;
+    }
+
+    var attrData = {
+      referrer: ref ? ref.substring(0, 500) : '',
+      utmSource: utmSource ? utmSource.substring(0, 100) : '',
+      utmMedium: utmMedium ? utmMedium.substring(0, 100) : '',
+      utmCampaign: utmCampaign ? utmCampaign.substring(0, 100) : '',
+      socialPlatform: platform,
+    };
+
+    try {
+      window.sessionStorage.setItem(ATTR_KEY, JSON.stringify(attrData));
+    } catch (e) {}
+
+    return attrData;
   }
 
   // Cooldown debouncing untuk mencegah klik ganda tak disengaja
@@ -343,12 +392,18 @@ app.get('/tracker.js', (c) => {
     }
     cooldownMap[elementId] = now;
 
+    var attr = getAttribution();
     var payload = JSON.stringify({
       projectId: projectId,
       writeKey: writeKey,
       elementId: elementId,
       pagePath: window.location.pathname || '/',
       sessionId: getSessionId(),
+      referrer: attr.referrer,
+      utmSource: attr.utmSource,
+      utmMedium: attr.utmMedium,
+      utmCampaign: attr.utmCampaign,
+      socialPlatform: attr.socialPlatform,
     });
 
     if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
@@ -1716,6 +1771,25 @@ app.post('/api/track/click', async (c) => {
   const writeKey = c.req.header('x-write-key') || body.writeKey || body.write_key;
   const originHeader = c.req.header('origin') || c.req.header('referer') || null;
 
+  // Atribusi Trafik Media Sosial & UTM
+  const referrer = body.referrer || c.req.header('referer') || null;
+  const utmSource = body.utmSource || body.utm_source || null;
+  const utmMedium = body.utmMedium || body.utm_medium || null;
+  const utmCampaign = body.utmCampaign || body.utm_campaign || null;
+  let socialPlatform = body.socialPlatform || body.social_platform || null;
+
+  if (!socialPlatform && (utmSource || referrer)) {
+    const s = String(utmSource || '').toLowerCase();
+    const r = String(referrer || '').toLowerCase();
+    if (s === 'tiktok' || r.includes('tiktok.com')) socialPlatform = 'tiktok';
+    else if (s === 'instagram' || r.includes('instagram.com')) socialPlatform = 'instagram';
+    else if (s === 'youtube' || r.includes('youtube.com') || r.includes('youtu.be')) socialPlatform = 'youtube';
+    else if (s === 'facebook' || r.includes('facebook.com') || r.includes('fb.com')) socialPlatform = 'facebook';
+    else if (s === 'twitter' || s === 'x' || r.includes('twitter.com') || r.includes('t.co') || r.includes('x.com')) socialPlatform = 'twitter';
+    else if (s === 'threads' || r.includes('threads.net')) socialPlatform = 'threads';
+    else if (s) socialPlatform = s;
+  }
+
   const task = (async () => {
     try {
       if (isRateLimited(rawIp)) {
@@ -1761,12 +1835,13 @@ app.post('/api/track/click', async (c) => {
       const country = String(cf.country || c.req.header('cf-ipcountry') || 'ID').toUpperCase().slice(0, 8);
       const city = String(cf.city || c.req.header('cf-ipcity') || 'Unknown').slice(0, 64);
 
-      // Atomic batch statement D1
-      await c.env.DB.batch([
+      // Atomic batch statement D1 dengan atribusi kampanye
+      const batchStatements: any[] = [
         c.env.DB.prepare(
           `INSERT INTO click_events (
-            project_id, element_id, page_path, session_id, user_id, user_agent, ip_address, country, city, created_at
-          ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, datetime('now'));`
+            project_id, element_id, page_path, session_id, user_id, user_agent, ip_address, country, city,
+            referrer, utm_source, utm_medium, utm_campaign, social_platform, created_at
+          ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'));`
         ).bind(
           projectId,
           String(elementId).slice(0, 100),
@@ -1775,7 +1850,12 @@ app.post('/api/track/click', async (c) => {
           userAgent,
           anonymized,
           country,
-          city
+          city,
+          referrer ? String(referrer).slice(0, 500) : null,
+          utmSource ? String(utmSource).slice(0, 100) : null,
+          utmMedium ? String(utmMedium).slice(0, 100) : null,
+          utmCampaign ? String(utmCampaign).slice(0, 100) : null,
+          socialPlatform ? String(socialPlatform).slice(0, 50) : null
         ),
         c.env.DB.prepare(
           `INSERT INTO cta_metrics (project_id, element_id, page_path, total_clicks, last_clicked_at)
@@ -1789,7 +1869,17 @@ app.post('/api/track/click', async (c) => {
           String(elementId).slice(0, 100),
           String(pagePath).slice(0, 255)
         ),
-      ]);
+      ];
+
+      if (utmCampaign) {
+        batchStatements.push(
+          c.env.DB.prepare(
+            `UPDATE social_campaign_links SET clicks_count = clicks_count + 1 WHERE utm_campaign = ?;`
+          ).bind(String(utmCampaign))
+        );
+      }
+
+      await c.env.DB.batch(batchStatements);
     } catch (err: any) {
       console.error('[Track Click D1 Error]', err.message);
     }

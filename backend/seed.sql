@@ -161,13 +161,26 @@ CREATE INDEX IF NOT EXISTS idx_social_posts_conn ON social_posts (connection_id)
 CREATE INDEX IF NOT EXISTS idx_social_posts_platform ON social_posts (platform);
 CREATE INDEX IF NOT EXISTS idx_social_posts_published ON social_posts (published_at DESC);
 
--- Sample Video / Post Analytics (Minimal Metrics: Views, Likes, Comments)
-INSERT OR REPLACE INTO social_posts (id, connection_id, platform, platform_post_id, title_or_caption, thumbnail_url, permalink, published_at, views_count, likes_count, comments_count, shares_count, additional_metrics, last_synced_at)
-VALUES
-  ('post_yt_seed_1', 'sc_mvpbsbcw_lm00u', 'youtube', 'vid_yt_101', 'Panduan Integrasi Beacon Analytics dengan Next.js & Cloudflare D1', 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80', 'https://www.youtube.com', '2026-10-24 10:30:00', 14250, 1040, 156, 84, '{"duration":"14:20","media_type":"Video Panjang","engagement_rate":"8.4%"}', datetime('now')),
-  ('post_yt_seed_2', 'sc_mvpbsbcw_lm00u', 'youtube', 'vid_yt_102', 'Fullstack Architecture: Menggantikan Server Tradisional dengan Edge Workers & SQLite', 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&auto=format&fit=crop&q=80', 'https://www.youtube.com', '2026-10-21 16:00:00', 8900, 670, 92, 42, '{"duration":"22:15","media_type":"Video Panjang","engagement_rate":"8.6%"}', datetime('now')),
-  ('post_yt_seed_3', 'sc_mvpbsbcw_lm00u', 'youtube', 'vid_yt_103', 'Shorts: Cara Tracking CTA & Event Click Tanpa Script Pelacak Pihak Ketiga', 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=600&auto=format&fit=crop&q=80', 'https://www.youtube.com/shorts', '2026-10-18 11:15:00', 24100, 2150, 230, 180, '{"duration":"0:54","media_type":"Shorts","engagement_rate":"9.9%"}', datetime('now')),
-  ('post_ig_seed_1', 'sc_mvq4aojg_cvhlx', 'instagram', 'ig_media_401', 'Reels: Setup Real-Time Analytics Dashboard dalam 5 Menit ✨ Pantau traffic dan konten profil @bbadralf_', 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80', 'https://www.instagram.com/bbadralf_', '2026-10-24 17:00:00', 21400, 1680, 142, 210, '{"saves":380,"media_type":"Reels","engagement_rate":"8.5%"}', datetime('now')),
-  ('post_ig_seed_2', 'sc_mvq4aojg_cvhlx', 'instagram', 'ig_media_402', 'Carousel: 5 Alasan Kenapa Tracking CTA Mandiri Lebih Efektif Dibanding Google Analytics 4 (@bbadralf_)', 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&auto=format&fit=crop&q=80', 'https://www.instagram.com/bbadralf_', '2026-10-20 19:30:00', 8600, 640, 75, 98, '{"saves":195,"media_type":"Carousel (10 Slide)","engagement_rate":"8.3%"}', datetime('now'));
+-- 9. Table social_campaign_links
+CREATE TABLE IF NOT EXISTS social_campaign_links (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    title TEXT NOT NULL,
+    target_url TEXT NOT NULL,
+    utm_source TEXT NOT NULL,
+    utm_medium TEXT DEFAULT 'bio' NOT NULL,
+    utm_campaign TEXT NOT NULL,
+    tracked_url TEXT NOT NULL,
+    clicks_count INTEGER DEFAULT 0 NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_links_user ON social_campaign_links (user_id);
+CREATE INDEX IF NOT EXISTS idx_social_links_project ON social_campaign_links (project_id);
+CREATE INDEX IF NOT EXISTS idx_social_links_platform ON social_campaign_links (platform);
 
 

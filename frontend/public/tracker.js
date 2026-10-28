@@ -33,8 +33,10 @@
   // Opsi Smart Auto-Capture (Aktif secara default)
   var autoCaptureEnabled = currentScript.getAttribute('data-auto-capture') !== 'false';
 
-  // Sesi unik browser
+  // Sesi unik browser & atribusi media sosial (Link-in-Bio / UTM)
   var STORAGE_KEY = 'cta_session_id';
+  var ATTR_KEY = 'cta_attr_data';
+
   function getSessionId() {
     try {
       var sess = window.sessionStorage.getItem(STORAGE_KEY);
@@ -46,6 +48,53 @@
     } catch (e) {
       return 'sess_' + Date.now();
     }
+  }
+
+  function getAttribution() {
+    try {
+      var cached = window.sessionStorage.getItem(ATTR_KEY);
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    } catch (e) {}
+
+    var params = new URLSearchParams(window.location.search || '');
+    var utmSource = (params.get('utm_source') || '').toLowerCase().trim();
+    var utmMedium = (params.get('utm_medium') || '').toLowerCase().trim();
+    var utmCampaign = (params.get('utm_campaign') || '').toLowerCase().trim();
+    var ref = document.referrer || '';
+    var refLower = ref.toLowerCase();
+
+    var platform = null;
+    if (utmSource === 'tiktok' || refLower.indexOf('tiktok.com') !== -1) {
+      platform = 'tiktok';
+    } else if (utmSource === 'instagram' || refLower.indexOf('instagram.com') !== -1 || refLower.indexOf('l.instagram.com') !== -1) {
+      platform = 'instagram';
+    } else if (utmSource === 'youtube' || refLower.indexOf('youtube.com') !== -1 || refLower.indexOf('youtu.be') !== -1) {
+      platform = 'youtube';
+    } else if (utmSource === 'facebook' || refLower.indexOf('facebook.com') !== -1 || refLower.indexOf('fb.com') !== -1) {
+      platform = 'facebook';
+    } else if (utmSource === 'twitter' || utmSource === 'x' || refLower.indexOf('twitter.com') !== -1 || refLower.indexOf('t.co') !== -1 || refLower.indexOf('x.com') !== -1) {
+      platform = 'twitter';
+    } else if (utmSource === 'threads' || refLower.indexOf('threads.net') !== -1) {
+      platform = 'threads';
+    } else if (utmSource) {
+      platform = utmSource;
+    }
+
+    var attrData = {
+      referrer: ref ? ref.substring(0, 500) : '',
+      utmSource: utmSource ? utmSource.substring(0, 100) : '',
+      utmMedium: utmMedium ? utmMedium.substring(0, 100) : '',
+      utmCampaign: utmCampaign ? utmCampaign.substring(0, 100) : '',
+      socialPlatform: platform,
+    };
+
+    try {
+      window.sessionStorage.setItem(ATTR_KEY, JSON.stringify(attrData));
+    } catch (e) {}
+
+    return attrData;
   }
 
   // Cooldown debouncing untuk mencegah klik ganda tak disengaja
@@ -61,12 +110,18 @@
     }
     cooldownMap[elementId] = now;
 
+    var attr = getAttribution();
     var payload = JSON.stringify({
       projectId: projectId,
       writeKey: writeKey,
       elementId: elementId,
       pagePath: window.location.pathname || '/',
       sessionId: getSessionId(),
+      referrer: attr.referrer,
+      utmSource: attr.utmSource,
+      utmMedium: attr.utmMedium,
+      utmCampaign: attr.utmCampaign,
+      socialPlatform: attr.socialPlatform,
     });
 
     if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {

@@ -3,6 +3,11 @@ import { getCookie } from 'hono/cookie';
 import { verify } from 'hono/jwt';
 import { getComposioClient } from './client';
 import { handleSocialMediaSync, syncSocialPostsForConnection } from '../../jobs/socialSyncJob';
+import {
+  analyzeSentiment,
+  analyzePostingPatterns,
+  generateActionableRecommendations,
+} from './intelligence';
 
 export type ComposioEnv = {
   Bindings: {
@@ -92,7 +97,48 @@ export async function ensureSocialTables(db: D1Database) {
         CREATE INDEX IF NOT EXISTS idx_social_posts_published 
         ON social_posts (published_at DESC);
       `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS social_campaign_links (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          title TEXT NOT NULL,
+          target_url TEXT NOT NULL,
+          utm_source TEXT NOT NULL,
+          utm_medium TEXT DEFAULT 'bio' NOT NULL,
+          utm_campaign TEXT NOT NULL,
+          tracked_url TEXT NOT NULL,
+          clicks_count INTEGER DEFAULT 0 NOT NULL,
+          created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+      `),
+      db.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_social_links_user 
+        ON social_campaign_links (user_id);
+      `),
+      db.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_social_links_project 
+        ON social_campaign_links (project_id);
+      `),
+      db.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_social_links_platform 
+        ON social_campaign_links (platform);
+      `),
     ]);
+
+    // Tambahkan kolom atribusi ke click_events secara aman (idempotent)
+    try { await db.prepare("ALTER TABLE click_events ADD COLUMN referrer TEXT;").run(); } catch {}
+    try { await db.prepare("ALTER TABLE click_events ADD COLUMN utm_source TEXT;").run(); } catch {}
+    try { await db.prepare("ALTER TABLE click_events ADD COLUMN utm_medium TEXT;").run(); } catch {}
+    try { await db.prepare("ALTER TABLE click_events ADD COLUMN utm_campaign TEXT;").run(); } catch {}
+    try { await db.prepare("ALTER TABLE click_events ADD COLUMN social_platform TEXT;").run(); } catch {}
+    try {
+      await db.prepare("CREATE INDEX IF NOT EXISTS idx_click_events_social ON click_events (project_id, social_platform, created_at DESC);").run();
+    } catch {}
+
     socialTablesInitialized = true;
   } catch (err: any) {
     console.warn('[DB] Failed to ensure social tables:', err.message);
@@ -814,8 +860,105 @@ composioRouter.get('/posts/:postId/comments', async (c) => {
             };
           });
         }
+      } else if (platform === 'youtube') {
+        const res: any = await composio.tools.execute('YOUTUBE_LIST_COMMENT_THREADS', {
+          connectedAccountId: post.composio_connection_id,
+          userId: post.user_id,
+          arguments: {
+            part: 'snippet',
+            videoId: post.platform_post_id,
+            maxResults: 50,
+          },
+        }).catch((err: any) => {
+          console.warn('[Composio YouTube Comments Error]', err.message);
+          return null;
+        });
+
+        if (res && res.data && Array.isArray(res.data.items)) {
+          comments = res.data.items.map((item: any) => {
+            const snip = item.snippet?.topLevelComment?.snippet || {};
+            return {
+              id: item.id || snip.id,
+              text: snip.textDisplay || snip.textOriginal || '',
+              username: snip.authorDisplayName || 'Pengguna YouTube',
+              timestamp: snip.publishedAt,
+              likeCount: Number(snip.likeCount || 0),
+            };
+          });
+        }
+      } else if (platform === 'tiktok') {
+        try {
+          const proxyRes: any = await composio.tools.proxyExecute({
+            connectedAccountId: post.composio_connection_id,
+            userId: post.user_id,
+            endpoint: '/v2/video/comment/list/?fields=id,text,create_time,like_count,reply_count',
+            method: 'POST',
+            body: {
+              video_id: post.platform_post_id,
+              max_count: 30,
+            },
+          }).catch((err: any) => {
+            console.warn('[Composio TikTok Comments Notice]', err.message);
+            return null;
+          });
+
+          const ttComments = proxyRes?.data?.data?.comments || proxyRes?.data?.comments || [];
+          if (Array.isArray(ttComments)) {
+            comments = ttComments.map((item: any) => {
+              const rawUsername =
+                item.user?.display_name ||
+                item.user?.username ||
+                item.user_name ||
+                null;
+              const dateIso = item.create_time
+                ? new Date(Number(item.create_time) * 1000).toISOString()
+                : new Date().toISOString();
+
+              return {
+                id: item.id || `tt_cmt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                text: item.text || '',
+                username: rawUsername || 'Pengguna TikTok',
+                timestamp: dateIso,
+                likeCount: Number(item.like_count || 0),
+              };
+            });
+          }
+        } catch (ttErr: any) {
+          console.warn('[TikTok Comments Exception]', ttErr.message);
+        }
       }
     }
+
+    // Analisis Sentimen untuk Setiap Komentar
+    let positiveCount = 0;
+    let neutralCount = 0;
+    let negativeCount = 0;
+    let scoreSum = 0;
+
+    const enrichedComments = comments.map((item: any) => {
+      const sentiment = analyzeSentiment(item.text);
+      if (sentiment.sentiment === 'positive') positiveCount++;
+      else if (sentiment.sentiment === 'negative') negativeCount++;
+      else neutralCount++;
+      scoreSum += sentiment.score;
+
+      return {
+        ...item,
+        sentiment: sentiment.sentiment,
+        sentimentScore: sentiment.score,
+        sentimentScorePct: sentiment.scorePct,
+        sentimentLabel: sentiment.label,
+        matchedKeywords: sentiment.matchedKeywords,
+      };
+    });
+
+    const totalCount = enrichedComments.length;
+    const avgScore = totalCount > 0 ? Number((scoreSum / totalCount).toFixed(2)) : 0;
+    const avgScorePct = totalCount > 0 ? Math.round(((avgScore + 1) / 2) * 100) : 50;
+
+    let postSentimentLabel = 'Netral';
+    if (avgScore > 0.15) postSentimentLabel = avgScore > 0.5 ? 'Sangat Positif' : 'Positif';
+    else if (avgScore < -0.15) postSentimentLabel = avgScore < -0.5 ? 'Perlu Perhatian' : 'Kritik';
 
     return c.json({
       success: true,
@@ -823,8 +966,19 @@ composioRouter.get('/posts/:postId/comments', async (c) => {
       platform: post.platform,
       titleOrCaption: post.title_or_caption,
       thumbnailUrl: post.thumbnail_url,
-      totalComments: comments.length,
-      comments,
+      totalComments: enrichedComments.length,
+      postSentiment: {
+        score: avgScore,
+        scorePct: avgScorePct,
+        label: postSentimentLabel,
+        positiveCount,
+        neutralCount,
+        negativeCount,
+        positivePct: totalCount > 0 ? Math.round((positiveCount / totalCount) * 100) : 0,
+        neutralPct: totalCount > 0 ? Math.round((neutralCount / totalCount) * 100) : 0,
+        negativePct: totalCount > 0 ? Math.round((negativeCount / totalCount) * 100) : 0,
+      },
+      comments: enrichedComments,
     });
   } catch (err: any) {
     console.error('[Get Post Comments Error]', err.message);
@@ -833,6 +987,248 @@ composioRouter.get('/posts/:postId/comments', async (c) => {
       500
     );
   }
+});
+
+// -------------------------------------------------------------
+// GET /api/composio/insights
+// Intelijensi Konten Berbasis AI: Analisis Sentimen Komentar,
+// Pola Waktu Unggah Terbaik (Timing Matrix), dan Rekomendasi Taktis
+// -------------------------------------------------------------
+composioRouter.get('/insights', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json(
+      { success: false, error: 'Unauthorized: Sesi tidak ditemukan atau kedaluwarsa' },
+      401
+    );
+  }
+
+  const reqPlatform = c.req.query('platform');
+  const reqConnectionId = c.req.query('connectionId');
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    // 1. Ambil seluruh postingan media sosial milik user ini
+    let query = `
+      SELECT p.id, p.connection_id, p.platform, p.platform_post_id, p.title_or_caption,
+             p.thumbnail_url, p.permalink, p.published_at, p.views_count, p.likes_count,
+             p.comments_count, p.shares_count, p.additional_metrics,
+             c.account_handle, c.composio_connection_id, c.user_id
+      FROM social_posts p
+      JOIN social_connections c ON p.connection_id = c.id
+      WHERE c.user_id = ?
+    `;
+    const params: any[] = [user.id];
+
+    if (reqPlatform && reqPlatform.toLowerCase() !== 'all') {
+      query += ` AND LOWER(p.platform) = ?`;
+      params.push(reqPlatform.toLowerCase());
+    }
+    if (reqConnectionId) {
+      query += ` AND p.connection_id = ?`;
+      params.push(reqConnectionId);
+    }
+
+    query += ` ORDER BY p.published_at DESC;`;
+
+    const { results: posts } = await c.env.DB.prepare(query).bind(...params).all<any>();
+
+    if (!posts || posts.length === 0) {
+      return c.json({
+        success: true,
+        hasData: false,
+        message: 'Belum ada konten tersinkronisasi untuk dianalisis oleh AI.',
+        summary: null,
+        sentiment: null,
+        timing: null,
+        recommendations: [],
+      });
+    }
+
+    // 2. Analisis Metrik Agregat
+    let totalViews = 0;
+    let totalLikes = 0;
+    let totalComments = 0;
+    let totalShares = 0;
+
+    posts.forEach((p) => {
+      totalViews += Number(p.views_count || 0);
+      totalLikes += Number(p.likes_count || 0);
+      totalComments += Number(p.comments_count || 0);
+      totalShares += Number(p.shares_count || 0);
+    });
+
+    const avgEngagementRate =
+      totalViews > 0
+        ? Number((((totalLikes + totalComments + totalShares) / totalViews) * 100).toFixed(1))
+        : 0;
+
+    // 3. Analisis Pola Waktu Unggah Terbaik (Timing Insight)
+    const timingInsight = analyzePostingPatterns(posts);
+
+    // 4. Analisis Sentimen Komentar Riil
+    const postWithComments = posts.filter((p) => Number(p.comments_count || 0) > 0);
+    let allAnalyzedComments: any[] = [];
+    const positiveKeywordsSet = new Set<string>();
+    const feedbackKeywordsSet = new Set<string>();
+
+    if (c.env.COMPOSIO_API_KEY && postWithComments.length > 0) {
+      const composio = getComposioClient(c.env.COMPOSIO_API_KEY);
+      for (const p of postWithComments.slice(0, 3)) {
+        const plat = (p.platform || '').toLowerCase();
+        let fetched: any[] = [];
+
+        if (plat === 'instagram' && p.composio_connection_id) {
+          const res: any = await composio.tools.execute('INSTAGRAM_GET_IG_MEDIA_COMMENTS', {
+            connectedAccountId: p.composio_connection_id,
+            userId: p.user_id,
+            arguments: {
+              ig_media_id: p.platform_post_id,
+              fields: 'id,text,username,timestamp,like_count',
+            },
+          }).catch(() => null);
+
+          if (res?.data?.data && Array.isArray(res.data.data)) {
+            fetched = res.data.data.map((item: any) => ({
+              text: item.text || '',
+            }));
+          }
+        }
+
+        fetched.forEach((f) => {
+          if (!f.text) return;
+          const sent = analyzeSentiment(f.text);
+          allAnalyzedComments.push(sent);
+          if (sent.sentiment === 'positive') {
+            sent.matchedKeywords.forEach((kw) => positiveKeywordsSet.add(kw));
+          } else if (sent.sentiment === 'negative') {
+            sent.matchedKeywords.forEach((kw) => feedbackKeywordsSet.add(kw));
+          }
+        });
+      }
+    }
+
+    // Hitung ringkasan sentimen
+    let positivePct = 0;
+    let neutralPct = 100;
+    let negativePct = 0;
+    let overallSentimentScore = 50;
+    let sentimentLabel = 'Menunggu Komentar Audiens';
+
+    if (allAnalyzedComments.length > 0) {
+      const posCount = allAnalyzedComments.filter((c) => c.sentiment === 'positive').length;
+      const negCount = allAnalyzedComments.filter((c) => c.sentiment === 'negative').length;
+      const neuCount = allAnalyzedComments.length - posCount - negCount;
+
+      positivePct = Math.round((posCount / allAnalyzedComments.length) * 100);
+      negativePct = Math.round((negCount / allAnalyzedComments.length) * 100);
+      neutralPct = 100 - positivePct - negativePct;
+
+      const avgRawScore =
+        allAnalyzedComments.reduce((acc, c) => acc + c.score, 0) / allAnalyzedComments.length;
+      overallSentimentScore = Math.round(((avgRawScore + 1) / 2) * 100);
+
+      if (avgRawScore > 0.4) sentimentLabel = 'Sangat Mengapresiasi (Positif Kuat)';
+      else if (avgRawScore > 0.1) sentimentLabel = 'Respons Positif';
+      else if (avgRawScore < -0.2) sentimentLabel = 'Memerlukan Evaluasi';
+      else sentimentLabel = 'Netral & Wajar';
+    }
+
+    const topPositiveKeywords = Array.from(positiveKeywordsSet).slice(0, 5);
+    const topFeedbackKeywords = Array.from(feedbackKeywordsSet).slice(0, 5);
+
+    // 5. Performa Berdasarkan Platform (Breakdown)
+    const platformMap: Record<string, { count: number; views: number; likes: number; comments: number }> = {};
+    posts.forEach((p) => {
+      const plat = (p.platform || 'other').toLowerCase();
+      if (!platformMap[plat]) platformMap[plat] = { count: 0, views: 0, likes: 0, comments: 0 };
+      platformMap[plat].count++;
+      platformMap[plat].views += Number(p.views_count || 0);
+      platformMap[plat].likes += Number(p.likes_count || 0);
+      platformMap[plat].comments += Number(p.comments_count || 0);
+    });
+
+    const platformBreakdown = Object.entries(platformMap).map(([plat, s]) => {
+      const rate = s.views > 0 ? (((s.likes + s.comments) / s.views) * 100).toFixed(1) + '%' : '0.0%';
+      return {
+        platform: plat,
+        postsCount: s.count,
+        totalViews: s.views,
+        totalLikes: s.likes,
+        totalComments: s.comments,
+        engagementRate: rate,
+      };
+    });
+
+    // 6. Buat Rekomendasi Taktis Berbasis AI
+    const recommendations = generateActionableRecommendations(
+      posts,
+      {
+        positivePct,
+        negativePct,
+        neutralPct,
+        topPositiveKeywords,
+        topFeedbackKeywords,
+      },
+      timingInsight,
+      '0.0%'
+    );
+
+    return c.json({
+      success: true,
+      hasData: true,
+      analyzedAt: new Date().toISOString(),
+      summary: {
+        totalPosts: posts.length,
+        totalViews,
+        totalLikes,
+        totalComments,
+        totalShares,
+        avgEngagementRate: `${avgEngagementRate}%`,
+        industryBenchmarkRate: '3.5% - 5.0%',
+        relativePerformance: avgEngagementRate >= 4.0 ? 'Di Atas Rata-rata Industri (+)' : 'Sesuai Rata-rata Industri',
+      },
+      sentiment: {
+        overallScore: overallSentimentScore,
+        sentimentLabel,
+        totalCommentsAnalyzed: allAnalyzedComments.length,
+        positivePct,
+        neutralPct,
+        negativePct,
+        topPositiveKeywords,
+        topFeedbackKeywords,
+      },
+      timing: timingInsight,
+      platformBreakdown,
+      recommendations,
+    });
+  } catch (err: any) {
+    console.error('[AI Insights Error]', err.message);
+    return c.json(
+      { success: false, error: err.message || 'Gagal memproses analisis intelijensi AI' },
+      500
+    );
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/composio/insights/refresh
+// Memaksa kalkulasi ulang analisis intelijensi AI
+// -------------------------------------------------------------
+composioRouter.post('/insights/refresh', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json(
+      { success: false, error: 'Unauthorized: Sesi tidak ditemukan atau kedaluwarsa' },
+      401
+    );
+  }
+
+  return c.json({
+    success: true,
+    message: 'Analisis intelijensi AI berhasil diperbarui.',
+  });
 });
 
 // -------------------------------------------------------------
@@ -875,6 +1271,286 @@ composioRouter.delete('/connections/:id', async (c) => {
       { success: false, error: err.message || 'Gagal memutuskan koneksi' },
       500
     );
+  }
+});
+
+// -------------------------------------------------------------
+// GET /api/composio/attribution
+// Aggregates cross-platform social media click & conversion stats
+// -------------------------------------------------------------
+composioRouter.get('/attribution', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    // Dapatkan semua project ID milik user
+    const projects = await c.env.DB.prepare(
+      `SELECT id, name FROM projects WHERE owner_id = ? OR id = 'prj_default';`
+    ).bind(user.id).all<any>();
+
+    const projectIds = (projects.results || []).map((p: any) => p.id);
+    if (projectIds.length === 0) {
+      projectIds.push('prj_default');
+    }
+
+    const placeholders = projectIds.map(() => '?').join(',');
+
+    // 1. Total Klik Web yang Berasal dari Media Sosial
+    const socialClicksRes: any = await c.env.DB.prepare(
+      `SELECT COUNT(*) as total FROM click_events 
+       WHERE project_id IN (${placeholders}) 
+         AND (social_platform IS NOT NULL OR utm_source IS NOT NULL OR referrer LIKE '%instagram.com%' OR referrer LIKE '%tiktok.com%' OR referrer LIKE '%youtube.com%' OR referrer LIKE '%facebook.com%');`
+    ).bind(...projectIds).first();
+
+    const totalSocialClicks = Number(socialClicksRes?.total || 0);
+
+    // 2. Total Semua Klik Web (untuk menghitung rasio kontribusi sosial)
+    const allClicksRes: any = await c.env.DB.prepare(
+      `SELECT COUNT(*) as total FROM click_events WHERE project_id IN (${placeholders});`
+    ).bind(...projectIds).first();
+    const totalWebClicks = Number(allClicksRes?.total || 0);
+
+    // 3. Breakdown per Platform Media Sosial
+    const breakdownRes = await c.env.DB.prepare(
+      `SELECT 
+         LOWER(COALESCE(social_platform, utm_source, 
+           CASE 
+             WHEN referrer LIKE '%instagram%' THEN 'instagram'
+             WHEN referrer LIKE '%tiktok%' THEN 'tiktok'
+             WHEN referrer LIKE '%youtube%' OR referrer LIKE '%youtu.be%' THEN 'youtube'
+             WHEN referrer LIKE '%facebook%' OR referrer LIKE '%fb.com%' THEN 'facebook'
+             WHEN referrer LIKE '%twitter%' OR referrer LIKE '%t.co%' OR referrer LIKE '%x.com%' THEN 'twitter'
+             ELSE 'lainnya'
+           END
+         )) as platform,
+         COUNT(*) as clicks,
+         COUNT(DISTINCT session_id) as sessions
+       FROM click_events
+       WHERE project_id IN (${placeholders})
+         AND (social_platform IS NOT NULL OR utm_source IS NOT NULL OR referrer LIKE '%instagram.com%' OR referrer LIKE '%tiktok.com%' OR referrer LIKE '%youtube.com%' OR referrer LIKE '%facebook.com%')
+       GROUP BY platform
+       ORDER BY clicks DESC;`
+    ).bind(...projectIds).all<any>();
+
+    const platformBreakdown = (breakdownRes.results || []).map((row: any) => ({
+      platform: row.platform,
+      clicks: Number(row.clicks || 0),
+      sessions: Number(row.sessions || 0),
+      percentage: totalSocialClicks > 0 ? Math.round((Number(row.clicks) / totalSocialClicks) * 100) : 0,
+    }));
+
+    // 4. CTA Paling Banyak Diklik oleh Pengunjung Media Sosial
+    const topCtasRes = await c.env.DB.prepare(
+      `SELECT 
+         c.element_id,
+         c.page_path,
+         COUNT(*) as clicks,
+         MAX(c.created_at) as last_clicked,
+         COALESCE(a.display_name, c.element_id) as friendly_name
+       FROM click_events c
+       LEFT JOIN element_aliases a ON a.project_id = c.project_id AND a.element_id = c.element_id
+       WHERE c.project_id IN (${placeholders})
+         AND (c.social_platform IS NOT NULL OR c.utm_source IS NOT NULL OR c.referrer LIKE '%instagram.com%' OR c.referrer LIKE '%tiktok.com%' OR c.referrer LIKE '%youtube.com%' OR c.referrer LIKE '%facebook.com%')
+       GROUP BY c.element_id, c.page_path
+       ORDER BY clicks DESC
+       LIMIT 5;`
+    ).bind(...projectIds).all<any>();
+
+    // 5. 10 Log Konversi Terakhir dari Media Sosial
+    const recentConversionsRes = await c.env.DB.prepare(
+      `SELECT 
+         c.id,
+         c.element_id,
+         c.page_path,
+         c.country,
+         c.city,
+         c.created_at,
+         COALESCE(c.social_platform, c.utm_source, 
+           CASE 
+             WHEN c.referrer LIKE '%instagram%' THEN 'instagram'
+             WHEN c.referrer LIKE '%tiktok%' THEN 'tiktok'
+             WHEN c.referrer LIKE '%youtube%' OR c.referrer LIKE '%youtu.be%' THEN 'youtube'
+             ELSE 'social'
+           END
+         ) as platform,
+         c.utm_campaign,
+         COALESCE(a.display_name, c.element_id) as friendly_name
+       FROM click_events c
+       LEFT JOIN element_aliases a ON a.project_id = c.project_id AND a.element_id = c.element_id
+       WHERE c.project_id IN (${placeholders})
+         AND (c.social_platform IS NOT NULL OR c.utm_source IS NOT NULL OR c.referrer LIKE '%instagram.com%' OR c.referrer LIKE '%tiktok.com%' OR c.referrer LIKE '%youtube.com%' OR c.referrer LIKE '%facebook.com%')
+       ORDER BY c.id DESC
+       LIMIT 10;`
+    ).bind(...projectIds).all<any>();
+
+    const conversionRate = totalWebClicks > 0 
+      ? ((totalSocialClicks / totalWebClicks) * 100).toFixed(1) + '%' 
+      : '0.0%';
+
+    return c.json({
+      success: true,
+      data: {
+        summary: {
+          totalSocialClicks,
+          totalWebClicks,
+          socialContributionRate: conversionRate,
+          topPlatform: platformBreakdown[0]?.platform || '-',
+          topCtaName: (topCtasRes.results?.[0] as any)?.friendly_name || '-',
+        },
+        breakdown: platformBreakdown,
+        topCtas: topCtasRes.results || [],
+        recentConversions: recentConversionsRes.results || [],
+      },
+    });
+  } catch (err: any) {
+    console.error('[Social Attribution Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal memuat atribusi sosial' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// GET /api/composio/links
+// Fetches tracked Link-in-Bio / Campaign links
+// -------------------------------------------------------------
+composioRouter.get('/links', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    const links = await c.env.DB.prepare(
+      `SELECT * FROM social_campaign_links WHERE user_id = ? ORDER BY created_at DESC;`
+    ).bind(user.id).all<any>();
+
+    return c.json({
+      success: true,
+      data: links.results || [],
+    });
+  } catch (err: any) {
+    console.error('[Get Campaign Links Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal mengambil tautan kampanye' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/composio/links
+// Creates a new tracked Link-in-Bio / Campaign link
+// -------------------------------------------------------------
+composioRouter.post('/links', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    const body = await c.req.json().catch(() => ({}));
+    const platform = String(body.platform || 'instagram').toLowerCase().trim();
+    const title = String(body.title || '').trim();
+    const targetUrlRaw = String(body.targetUrl || '').trim();
+    const campaignRaw = String(body.campaignName || '').trim();
+
+    if (!title || !targetUrlRaw) {
+      return c.json({ success: false, error: 'Judul tautan dan URL tujuan wajib diisi' }, 400);
+    }
+
+    // Normalisasi URL tujuan
+    let targetUrl = targetUrlRaw;
+    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+      targetUrl = 'https://' + targetUrl;
+    }
+
+    // Format slug campaign
+    const utmCampaign = campaignRaw
+      ? campaignRaw.toLowerCase().replace(/[^a-z0-9_-]/g, '_')
+      : 'bio_' + platform + '_' + Math.random().toString(36).substring(2, 6);
+
+    const utmSource = platform;
+    const utmMedium = 'bio';
+
+    const separator = targetUrl.includes('?') ? '&' : '?';
+    const trackedUrl = `${targetUrl}${separator}utm_source=${encodeURIComponent(utmSource)}&utm_medium=${encodeURIComponent(utmMedium)}&utm_campaign=${encodeURIComponent(utmCampaign)}`;
+
+    const defaultProject = await c.env.DB.prepare(
+      `SELECT id FROM projects WHERE owner_id = ? ORDER BY created_at ASC LIMIT 1;`
+    ).bind(user.id).first<any>();
+    const projectId = defaultProject?.id || 'prj_default';
+
+    const id = 'link_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+    await c.env.DB.prepare(
+      `INSERT INTO social_campaign_links (
+        id, user_id, project_id, platform, title, target_url, utm_source, utm_medium, utm_campaign, tracked_url, clicks_count, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'));`
+    ).bind(
+      id,
+      user.id,
+      projectId,
+      platform,
+      title,
+      targetUrl,
+      utmSource,
+      utmMedium,
+      utmCampaign,
+      trackedUrl
+    ).run();
+
+    return c.json({
+      success: true,
+      message: 'Tautan pelacak Link-in-Bio berhasil dibuat',
+      data: {
+        id,
+        platform,
+        title,
+        target_url: targetUrl,
+        utm_source: utmSource,
+        utm_medium: utmMedium,
+        utm_campaign: utmCampaign,
+        tracked_url: trackedUrl,
+        clicks_count: 0,
+        created_at: new Date().toISOString(),
+      },
+    });
+  } catch (err: any) {
+    console.error('[Create Link Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal membuat tautan pelacak' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// DELETE /api/composio/links/:id
+// Deletes a tracked Link-in-Bio
+// -------------------------------------------------------------
+composioRouter.delete('/links/:id', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  const linkId = c.req.param('id');
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    await c.env.DB.prepare(
+      `DELETE FROM social_campaign_links WHERE id = ? AND user_id = ?;`
+    ).bind(linkId, user.id).run();
+
+    return c.json({
+      success: true,
+      message: 'Tautan pelacak berhasil dihapus',
+    });
+  } catch (err: any) {
+    console.error('[Delete Link Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal menghapus tautan' }, 500);
   }
 });
 

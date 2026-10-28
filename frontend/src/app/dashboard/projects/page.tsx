@@ -606,7 +606,7 @@ export default function ProjectsPage() {
 
                 <div className="space-y-2 text-xs text-zinc-600 mt-3.5">
                   <div>
-                    <span className="text-zinc-400 block mb-0.5 text-[11px] font-medium flex items-center gap-1">
+                    <span className="text-zinc-400 mb-0.5 text-[11px] font-medium flex items-center gap-1">
                       <Key className="w-3 h-3 text-zinc-400" />
                       Public Write Key:
                     </span>
@@ -616,7 +616,7 @@ export default function ProjectsPage() {
                   </div>
 
                   <div>
-                    <span className="text-zinc-400 block mb-0.5 text-[11px] font-medium flex items-center gap-1">
+                    <span className="text-zinc-400 mb-0.5 text-[11px] font-medium flex items-center gap-1">
                       <Globe className="w-3 h-3 text-zinc-400" />
                       Domain Terdaftar:
                     </span>
