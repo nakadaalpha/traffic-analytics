@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import { verify } from 'hono/jwt';
 import { getComposioClient } from './client';
-import { handleSocialMediaSync } from '../../jobs/socialSyncJob';
+import { handleSocialMediaSync, syncSocialPostsForConnection } from '../../jobs/socialSyncJob';
 
 export type ComposioEnv = {
   Bindings: {
@@ -60,6 +60,37 @@ export async function ensureSocialTables(db: D1Database) {
       db.prepare(`
         CREATE INDEX IF NOT EXISTS idx_social_metrics_conn_time 
         ON social_metrics_history (connection_id, recorded_at DESC);
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS social_posts (
+          id TEXT PRIMARY KEY,
+          connection_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          platform_post_id TEXT NOT NULL,
+          title_or_caption TEXT,
+          thumbnail_url TEXT,
+          permalink TEXT,
+          published_at TEXT,
+          views_count REAL DEFAULT 0,
+          likes_count REAL DEFAULT 0,
+          comments_count REAL DEFAULT 0,
+          shares_count REAL DEFAULT 0,
+          additional_metrics TEXT,
+          last_synced_at TEXT DEFAULT (datetime('now')) NOT NULL,
+          FOREIGN KEY (connection_id) REFERENCES social_connections(id) ON DELETE CASCADE
+        );
+      `),
+      db.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_social_posts_conn 
+        ON social_posts (connection_id);
+      `),
+      db.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_social_posts_platform 
+        ON social_posts (platform);
+      `),
+      db.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_social_posts_published 
+        ON social_posts (published_at DESC);
       `),
     ]);
     socialTablesInitialized = true;
@@ -124,12 +155,13 @@ composioRouter.post('/connect', async (c) => {
 
   const body = await c.req.json().catch(() => ({}));
   const platform = String(body.platform || '').trim().toLowerCase();
+  const validPlatforms = ['youtube', 'instagram', 'tiktok', 'facebook', 'github'];
 
-  if (!platform) {
+  if (!platform || !validPlatforms.includes(platform)) {
     return c.json(
       {
         success: false,
-        error: 'Parameter "platform" wajib disertakan (contoh: "youtube", "twitter", "instagram")',
+        error: `Parameter "platform" tidak valid. Platform yang didukung: ${validPlatforms.join(', ')}`,
       },
       400
     );
@@ -150,7 +182,11 @@ composioRouter.post('/connect', async (c) => {
     const composio = getComposioClient(composioApiKey);
 
     // Composio v3: Create user session bound to existing stable users.id
-    const session = await composio.create(user.id);
+    const sessionPayload: any = {};
+    if (body.authConfigId) {
+      sessionPayload.authConfigs = { [platform]: body.authConfigId };
+    }
+    const session = await composio.create(user.id, sessionPayload);
 
     // Call session.authorize with platform toolkit name
     const connectionRequest = await session.authorize(platform, {
@@ -190,10 +226,14 @@ composioRouter.post('/connect', async (c) => {
     });
   } catch (err: any) {
     console.error('[Composio Connect Error]', err.message);
+    let userFriendlyError = err.message || 'Gagal memulai koneksi Composio';
+    if (err.message && (err.message.includes('NoManagedAuth') || err.message.includes('no auth config'))) {
+      userFriendlyError = `Konfigurasi Auth Config untuk ${platform.toUpperCase()} belum disimpan di dashboard Composio. Silakan pastikan Anda sudah memasukkan Client Key & Client Secret pada form Auth Config TikTok di dashboard Composio, lalu klik Create/Save.`;
+    }
     return c.json(
       {
         success: false,
-        error: err.message || 'Gagal memulai koneksi Composio',
+        error: userFriendlyError,
       },
       500
     );
@@ -360,15 +400,26 @@ composioRouter.get('/metrics', async (c) => {
       });
     }
 
-    // 2. Ambil seluruh data metrik time-series dari tabel social_metrics_history
+    const reqConnectionId = c.req.query('connectionId');
+    const reqPlatform = c.req.query('platform');
+
+    let primaryAccount = connections[0];
+    if (reqConnectionId) {
+      const match = connections.find((c: any) => c.id === reqConnectionId);
+      if (match) primaryAccount = match;
+    } else if (reqPlatform) {
+      const match = connections.find((c: any) => c.platform.toLowerCase() === reqPlatform.toLowerCase());
+      if (match) primaryAccount = match;
+    }
+
+    // 2. Ambil data metrik time-series terfokus untuk akun yang dipilih
     const { results: historyRows } = await c.env.DB.prepare(
       `SELECT h.connection_id, h.platform, h.metric_type, h.metric_value, h.snapshot_date, h.recorded_at
        FROM social_metrics_history h
-       JOIN social_connections c ON h.connection_id = c.id
-       WHERE c.user_id = ?
+       WHERE h.connection_id = ?
        ORDER BY h.snapshot_date ASC, h.id ASC;`
     )
-      .bind(user.id)
+      .bind(primaryAccount.id)
       .all<any>();
 
     // 3. Ekstrak nilai metrik terbaru
@@ -399,15 +450,17 @@ composioRouter.get('/metrics', async (c) => {
 
     const timeSeries = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
 
-    // Hitung pertumbuhan subscriber mingguan (growth delta)
-    let growthDelta = '+0%';
+    // Hitung pertumbuhan subscriber/follower (growth delta) dari data riil yang terekam
+    let growthDelta = 'Hari ke-1 (Mulai Pelacakan)';
     if (timeSeries.length >= 2) {
       const first = timeSeries[0].subscribers;
       const last = timeSeries[timeSeries.length - 1].subscribers;
       if (first > 0) {
         const diff = last - first;
         const pct = ((diff / first) * 100).toFixed(1);
-        growthDelta = diff >= 0 ? `+${pct}%` : `${pct}%`;
+        growthDelta = diff >= 0 ? `+${pct}% (${timeSeries.length} hari)` : `${pct}% (${timeSeries.length} hari)`;
+      } else {
+        growthDelta = `+${last} baru`;
       }
     }
 
@@ -415,15 +468,22 @@ composioRouter.get('/metrics', async (c) => {
       success: true,
       hasConnections: true,
       connectionsCount: connections.length,
-      primaryAccount: connections[0],
+      connections: connections.map((conn: any) => ({
+        id: conn.id,
+        platform: conn.platform,
+        accountHandle: conn.account_handle || null,
+        lastSyncedAt: conn.last_synced_at,
+      })),
+      primaryAccount,
       summary: {
+        connectionId: primaryAccount.id,
         subscribers: latestSubscribers,
         views: latestViews,
         videos: latestVideos,
         growthRate: growthDelta,
-        lastSyncedAt: connections[0]?.last_synced_at,
-        platform: connections[0]?.platform,
-        accountHandle: connections[0]?.account_handle || '@epicerie',
+        lastSyncedAt: primaryAccount?.last_synced_at,
+        platform: primaryAccount?.platform,
+        accountHandle: primaryAccount?.account_handle || null,
       },
       timeSeries,
     });
@@ -469,6 +529,313 @@ composioRouter.post('/sync', async (c) => {
 });
 
 // -------------------------------------------------------------
+// GET /api/composio/posts
+// Mengambil daftar analisa per video / postingan dengan metrik minimal: views, likes, comments
+// -------------------------------------------------------------
+composioRouter.get('/posts', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json(
+      { success: false, error: 'Unauthorized: Sesi tidak ditemukan atau kedaluwarsa' },
+      401
+    );
+  }
+
+  const filterPlatform = c.req.query('platform');
+  const sortBy = c.req.query('sort') || 'recent';
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    // Ambil koneksi akun aktif pengguna
+    const { results: connections } = await c.env.DB.prepare(
+      `SELECT id, platform, account_handle, composio_connection_id, user_id 
+       FROM social_connections 
+       WHERE user_id = ? AND status IN ('ACTIVE', 'INITIATED');`
+    )
+      .bind(user.id)
+      .all<any>();
+
+    if (!connections || connections.length === 0) {
+      return c.json({
+        success: true,
+        hasConnections: false,
+        posts: [],
+        summary: {
+          totalPosts: 0,
+          totalViews: 0,
+          totalLikes: 0,
+          totalComments: 0,
+          totalShares: 0,
+          avgEngagementRate: '0%',
+        },
+      });
+    }
+
+    let composio = null;
+    if (c.env.COMPOSIO_API_KEY) {
+      try {
+        composio = getComposioClient(c.env.COMPOSIO_API_KEY);
+      } catch (err: any) {
+        console.warn('[Composio Client Init Notice]:', err.message);
+      }
+    }
+
+    // Pastikan setiap koneksi memiliki data postingan di tabel social_posts
+    for (const conn of connections) {
+      await syncSocialPostsForConnection(c.env, conn, composio, false);
+    }
+
+    // Susun query pengambilan data
+    let query = `
+      SELECT p.id, p.connection_id, p.platform, p.platform_post_id, p.title_or_caption,
+             p.thumbnail_url, p.permalink, p.published_at, p.views_count, p.likes_count,
+             p.comments_count, p.shares_count, p.additional_metrics, p.last_synced_at,
+             c.account_handle
+      FROM social_posts p
+      JOIN social_connections c ON p.connection_id = c.id
+      WHERE c.user_id = ?
+    `;
+    const params: any[] = [user.id];
+
+    if (filterPlatform && filterPlatform !== 'all') {
+      query += ` AND p.platform = ?`;
+      params.push(filterPlatform.toLowerCase());
+    }
+
+    if (sortBy === 'views') {
+      query += ` ORDER BY p.views_count DESC, p.published_at DESC`;
+    } else if (sortBy === 'likes') {
+      query += ` ORDER BY p.likes_count DESC, p.published_at DESC`;
+    } else if (sortBy === 'comments') {
+      query += ` ORDER BY p.comments_count DESC, p.published_at DESC`;
+    } else {
+      query += ` ORDER BY p.published_at DESC, p.views_count DESC`;
+    }
+
+    const { results: rows } = await c.env.DB.prepare(query)
+      .bind(...params)
+      .all<any>();
+
+    let totalViews = 0;
+    let totalLikes = 0;
+    let totalComments = 0;
+    let totalShares = 0;
+
+    const posts = (rows || []).map((r: any) => {
+      const views = Number(r.views_count || 0);
+      const likes = Number(r.likes_count || 0);
+      const comments = Number(r.comments_count || 0);
+      const shares = Number(r.shares_count || 0);
+
+      totalViews += views;
+      totalLikes += likes;
+      totalComments += comments;
+      totalShares += shares;
+
+      let extras: any = {};
+      if (r.additional_metrics) {
+        try {
+          extras = typeof r.additional_metrics === 'string' ? JSON.parse(r.additional_metrics) : r.additional_metrics;
+        } catch {}
+      }
+
+      const calculatedRate = views > 0 ? (((likes + comments) / views) * 100).toFixed(1) + '%' : '0%';
+
+      return {
+        id: r.id,
+        connectionId: r.connection_id,
+        platform: r.platform,
+        platformPostId: r.platform_post_id,
+        titleOrCaption: r.title_or_caption,
+        thumbnailUrl: r.thumbnail_url,
+        permalink: r.permalink,
+        publishedAt: r.published_at,
+        viewsCount: views,
+        likesCount: likes,
+        commentsCount: comments,
+        sharesCount: shares,
+        engagementRate: extras.engagement_rate || calculatedRate,
+        additionalMetrics: extras,
+        accountHandle: r.account_handle,
+        lastSyncedAt: r.last_synced_at,
+      };
+    });
+
+    const avgEngagementRate =
+      totalViews > 0
+        ? (((totalLikes + totalComments) / totalViews) * 100).toFixed(1) + '%'
+        : '0%';
+
+    return c.json({
+      success: true,
+      hasConnections: true,
+      posts,
+      summary: {
+        totalPosts: posts.length,
+        totalViews,
+        totalLikes,
+        totalComments,
+        totalShares,
+        avgEngagementRate,
+      },
+    });
+  } catch (err: any) {
+    console.error('[Composio Posts Error]', err.message);
+    return c.json(
+      { success: false, error: err.message || 'Gagal memuat analitik postingan' },
+      500
+    );
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/composio/posts/sync
+// Force sync konten video dan postingan media sosial
+// -------------------------------------------------------------
+composioRouter.post('/posts/sync', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json(
+      { success: false, error: 'Unauthorized: Sesi tidak ditemukan atau kedaluwarsa' },
+      401
+    );
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    const { results: connections } = await c.env.DB.prepare(
+      `SELECT id, platform, account_handle, composio_connection_id, user_id 
+       FROM social_connections 
+       WHERE user_id = ? AND status IN ('ACTIVE', 'INITIATED');`
+    )
+      .bind(user.id)
+      .all<any>();
+
+    let composio = null;
+    if (c.env.COMPOSIO_API_KEY) {
+      try {
+        composio = getComposioClient(c.env.COMPOSIO_API_KEY);
+      } catch (err: any) {
+        console.warn('[Composio Client Init Notice]:', err.message);
+      }
+    }
+
+    if (connections && connections.length > 0) {
+      for (const conn of connections) {
+        await syncSocialPostsForConnection(c.env, conn, composio, true);
+      }
+    }
+
+    return c.json({
+      success: true,
+      message: 'Performa video dan postingan berhasil disinkronisasi',
+    });
+  } catch (err: any) {
+    console.error('[Composio Posts Sync Error]', err.message);
+    return c.json(
+      { success: false, error: err.message || 'Gagal menyinkronkan postingan' },
+      500
+    );
+  }
+});
+
+// -------------------------------------------------------------
+// GET /api/composio/posts/:postId/comments
+// Mengambil daftar komentar riil untuk postingan atau video spesifik
+// -------------------------------------------------------------
+composioRouter.get('/posts/:postId/comments', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json(
+      { success: false, error: 'Unauthorized: Sesi tidak ditemukan atau kedaluwarsa' },
+      401
+    );
+  }
+
+  const postId = c.req.param('postId');
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    // Ambil data postingan dan koneksi terkait
+    const post: any = await c.env.DB.prepare(
+      `SELECT p.id, p.connection_id, p.platform, p.platform_post_id, p.title_or_caption,
+              p.thumbnail_url, p.permalink, p.comments_count,
+              c.composio_connection_id, c.account_handle, c.user_id
+       FROM social_posts p
+       JOIN social_connections c ON p.connection_id = c.id
+       WHERE p.id = ? AND c.user_id = ?;`
+    )
+      .bind(postId, user.id)
+      .first();
+
+    if (!post) {
+      return c.json(
+        { success: false, error: 'Postingan tidak ditemukan atau tidak memiliki akses' },
+        404
+      );
+    }
+
+    let comments: any[] = [];
+    const platform = (post.platform || '').toLowerCase();
+
+    if (c.env.COMPOSIO_API_KEY && post.composio_connection_id) {
+      const composio = getComposioClient(c.env.COMPOSIO_API_KEY);
+
+      if (platform === 'instagram') {
+        const res: any = await composio.tools.execute('INSTAGRAM_GET_IG_MEDIA_COMMENTS', {
+          connectedAccountId: post.composio_connection_id,
+          userId: post.user_id,
+          arguments: {
+            ig_media_id: post.platform_post_id,
+            fields: 'id,text,username,from,timestamp,like_count',
+          },
+        }).catch((err: any) => {
+          console.warn('[Composio Comments Error]', err.message);
+          return null;
+        });
+
+        if (res && res.data && Array.isArray(res.data.data)) {
+          comments = res.data.data.map((item: any) => {
+            const rawUsername =
+              item.from?.username ||
+              item.username ||
+              item.user?.username ||
+              null;
+
+            return {
+              id: item.id,
+              text: item.text || '',
+              username: rawUsername || 'Pengguna Instagram',
+              timestamp: item.timestamp,
+              likeCount: Number(item.like_count || 0),
+            };
+          });
+        }
+      }
+    }
+
+    return c.json({
+      success: true,
+      postId: post.id,
+      platform: post.platform,
+      titleOrCaption: post.title_or_caption,
+      thumbnailUrl: post.thumbnail_url,
+      totalComments: comments.length,
+      comments,
+    });
+  } catch (err: any) {
+    console.error('[Get Post Comments Error]', err.message);
+    return c.json(
+      { success: false, error: err.message || 'Gagal mengambil komentar postingan' },
+      500
+    );
+  }
+});
+
+// -------------------------------------------------------------
 // DELETE /api/composio/connections/:id
 // Disconnects / removes social media account
 // -------------------------------------------------------------
@@ -487,6 +854,9 @@ composioRouter.delete('/connections/:id', async (c) => {
     await ensureSocialTables(c.env.DB);
 
     await c.env.DB.batch([
+      c.env.DB.prepare(
+        `DELETE FROM social_posts WHERE connection_id = ?;`
+      ).bind(connectionId),
       c.env.DB.prepare(
         `DELETE FROM social_metrics_history WHERE connection_id = ?;`
       ).bind(connectionId),

@@ -48,7 +48,7 @@ export default function DashboardLayout({
         </main>
 
         <footer className="border-t border-zinc-200 bg-white py-4 px-6 text-center text-xs text-zinc-500">
-          Firenalytics &bull; Cloudflare Workers (Hono &amp; D1) &bull; Clean Monochrome Interface
+          Firenalytics &bull; Platform Analitik Lalu Lintas &amp; Media Sosial Terpadu
         </footer>
       </div>
     </div>

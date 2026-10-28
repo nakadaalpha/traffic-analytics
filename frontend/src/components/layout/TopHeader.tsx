@@ -13,7 +13,7 @@ export function TopHeader() {
       <div className="flex items-center gap-3 pl-10 lg:pl-0">
         <div className="flex items-center gap-2 text-xs font-medium text-zinc-600 bg-zinc-100 border border-zinc-200 px-2.5 py-1 rounded-full">
           <Activity className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
-          <span>Real-time Beacon Active</span>
+          <span>Pelacakan Real-Time Aktif</span>
         </div>
       </div>
 

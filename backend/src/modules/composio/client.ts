@@ -19,6 +19,12 @@ export function getComposioClient(apiKey?: string): Composio {
   if (!composioInstance || currentApiKey !== resolvedKey) {
     composioInstance = new Composio({
       apiKey: resolvedKey,
+      toolkitVersions: {
+        youtube: '20261014_00',
+        instagram: '20261014_00',
+        github: '20261023_00',
+        facebook: '20261023_00',
+      },
     });
     currentApiKey = resolvedKey;
   }

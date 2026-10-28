@@ -133,5 +133,28 @@ CREATE TABLE IF NOT EXISTS social_metrics_history (
 CREATE INDEX IF NOT EXISTS idx_social_metrics_conn_time 
     ON social_metrics_history (connection_id, recorded_at DESC);
 
+-- 9. Tabel social_posts: Menyimpan analitik performa per video / postingan (YouTube, X, Instagram, Facebook, Threads, dll)
+CREATE TABLE IF NOT EXISTS social_posts (
+    id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    platform TEXT NOT NULL, -- 'youtube', 'twitter', 'instagram', 'facebook', 'threads', 'github'
+    platform_post_id TEXT NOT NULL,
+    title_or_caption TEXT,
+    thumbnail_url TEXT,
+    permalink TEXT,
+    published_at TEXT,
+    views_count REAL DEFAULT 0,
+    likes_count REAL DEFAULT 0,
+    comments_count REAL DEFAULT 0,
+    shares_count REAL DEFAULT 0,
+    additional_metrics TEXT, -- JSON format: { engagement_rate, retweets, saves, media_type, duration }
+    last_synced_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (connection_id) REFERENCES social_connections(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_posts_conn ON social_posts (connection_id);
+CREATE INDEX IF NOT EXISTS idx_social_posts_platform ON social_posts (platform);
+CREATE INDEX IF NOT EXISTS idx_social_posts_published ON social_posts (published_at DESC);
+
 
 

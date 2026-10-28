@@ -131,3 +131,43 @@ INSERT OR IGNORE INTO click_events (id, project_id, element_id, page_path, sessi
 
 -- 7. Re-link active social connections to usr_mvggi2d8_n6nxd
 UPDATE social_connections SET user_id = 'usr_mvggi2d8_n6nxd' WHERE user_id = 'usr_seed_epicerie';
+
+-- Seed active real connections for development
+INSERT OR REPLACE INTO social_connections (id, user_id, platform, composio_connection_id, account_handle, status, last_synced_at, created_at)
+VALUES 
+  ('sc_mvpbsbcw_lm00u', 'usr_mvggi2d8_n6nxd', 'youtube', 'conn_mvpbsbcw', '@epicerie_channel', 'ACTIVE', datetime('now'), '2026-10-26 14:01:53'),
+  ('sc_mvq4aojg_cvhlx', 'usr_mvggi2d8_n6nxd', 'instagram', 'ca_xjmLdMfJj3zp', '@bbadralf_', 'ACTIVE', datetime('now'), '2026-10-27 03:19:59');
+
+-- 8. Table social_posts & initial sample posts for local development
+CREATE TABLE IF NOT EXISTS social_posts (
+    id TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    platform_post_id TEXT NOT NULL,
+    title_or_caption TEXT,
+    thumbnail_url TEXT,
+    permalink TEXT,
+    published_at TEXT,
+    views_count REAL DEFAULT 0,
+    likes_count REAL DEFAULT 0,
+    comments_count REAL DEFAULT 0,
+    shares_count REAL DEFAULT 0,
+    additional_metrics TEXT,
+    last_synced_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (connection_id) REFERENCES social_connections(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_posts_conn ON social_posts (connection_id);
+CREATE INDEX IF NOT EXISTS idx_social_posts_platform ON social_posts (platform);
+CREATE INDEX IF NOT EXISTS idx_social_posts_published ON social_posts (published_at DESC);
+
+-- Sample Video / Post Analytics (Minimal Metrics: Views, Likes, Comments)
+INSERT OR REPLACE INTO social_posts (id, connection_id, platform, platform_post_id, title_or_caption, thumbnail_url, permalink, published_at, views_count, likes_count, comments_count, shares_count, additional_metrics, last_synced_at)
+VALUES
+  ('post_yt_seed_1', 'sc_mvpbsbcw_lm00u', 'youtube', 'vid_yt_101', 'Panduan Integrasi Beacon Analytics dengan Next.js & Cloudflare D1', 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80', 'https://www.youtube.com', '2026-10-24 10:30:00', 14250, 1040, 156, 84, '{"duration":"14:20","media_type":"Video Panjang","engagement_rate":"8.4%"}', datetime('now')),
+  ('post_yt_seed_2', 'sc_mvpbsbcw_lm00u', 'youtube', 'vid_yt_102', 'Fullstack Architecture: Menggantikan Server Tradisional dengan Edge Workers & SQLite', 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&auto=format&fit=crop&q=80', 'https://www.youtube.com', '2026-10-21 16:00:00', 8900, 670, 92, 42, '{"duration":"22:15","media_type":"Video Panjang","engagement_rate":"8.6%"}', datetime('now')),
+  ('post_yt_seed_3', 'sc_mvpbsbcw_lm00u', 'youtube', 'vid_yt_103', 'Shorts: Cara Tracking CTA & Event Click Tanpa Script Pelacak Pihak Ketiga', 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=600&auto=format&fit=crop&q=80', 'https://www.youtube.com/shorts', '2026-10-18 11:15:00', 24100, 2150, 230, 180, '{"duration":"0:54","media_type":"Shorts","engagement_rate":"9.9%"}', datetime('now')),
+  ('post_ig_seed_1', 'sc_mvq4aojg_cvhlx', 'instagram', 'ig_media_401', 'Reels: Setup Real-Time Analytics Dashboard dalam 5 Menit ✨ Pantau traffic dan konten profil @bbadralf_', 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80', 'https://www.instagram.com/bbadralf_', '2026-10-24 17:00:00', 21400, 1680, 142, 210, '{"saves":380,"media_type":"Reels","engagement_rate":"8.5%"}', datetime('now')),
+  ('post_ig_seed_2', 'sc_mvq4aojg_cvhlx', 'instagram', 'ig_media_402', 'Carousel: 5 Alasan Kenapa Tracking CTA Mandiri Lebih Efektif Dibanding Google Analytics 4 (@bbadralf_)', 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=600&auto=format&fit=crop&q=80', 'https://www.instagram.com/bbadralf_', '2026-10-20 19:30:00', 8600, 640, 75, 98, '{"saves":195,"media_type":"Carousel (10 Slide)","engagement_rate":"8.3%"}', datetime('now'));
+
+

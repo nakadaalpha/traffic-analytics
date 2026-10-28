@@ -32,7 +32,7 @@ export function Sidebar() {
       icon: FileText,
     },
     {
-      name: 'Social Media Engine',
+      name: 'Analitik Media Sosial',
       href: '/dashboard/social',
       icon: Share2,
     },
