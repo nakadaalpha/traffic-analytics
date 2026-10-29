@@ -22,11 +22,13 @@ import {
   SlidersHorizontal,
   RotateCw,
   Shield,
-  Lock,
-  Server,
-  ExternalLink,
+  Users,
+  UserPlus,
+  Share2,
+  FileText,
+  Building2,
 } from "lucide-react";
-import Link from "next/link";
+import { useProject } from "@/context/ProjectContext";
 
 interface ProjectData {
   id: string;
@@ -34,18 +36,21 @@ interface ProjectData {
   writeKey: string;
   allowedOrigins: string[];
   isActive: boolean;
+  ownerId?: string;
+  role?: 'owner' | 'editor' | 'viewer';
   createdAt?: string;
 }
 
-interface ProjectApiKey {
+export interface ProjectMember {
   id: string;
-  project_id: string;
-  key_prefix: string;
+  projectId: string;
+  userId: string;
+  role: 'owner' | 'editor' | 'viewer';
   name: string;
-  scopes: string;
-  is_active: number | boolean;
-  created_at: string;
-  last_used_at?: string | null;
+  email: string;
+  username: string;
+  createdAt?: string;
+  isOwner?: boolean;
 }
 
 interface FrameworkSnippet {
@@ -127,19 +132,67 @@ const FRAMEWORK_SNIPPETS: FrameworkSnippet[] = [
   },
 ];
 
+const CTA_BUTTON_EXAMPLES = [
+  {
+    id: "whatsapp",
+    title: "Tombol WhatsApp / Kontak Langsung",
+    icon: Share2,
+    code: `<a 
+  href="https://wa.me/62812345678" 
+  data-track-cta="btn-hubungi-whatsapp"
+  target="_blank"
+  rel="noopener noreferrer"
+>
+  Hubungi via WhatsApp
+</a>`,
+  },
+  {
+    id: "brosur",
+    title: "Tombol Unduh Brosur / Katalog PDF",
+    icon: FileText,
+    code: `<a 
+  href="/brosur.pdf" 
+  download 
+  data-track-cta="btn-download-brosur"
+>
+  Unduh Brosur
+</a>`,
+  },
+  {
+    id: "checkout",
+    title: "Tombol Beli / Checkout Keranjang",
+    icon: Layers,
+    code: `<button 
+  type="button" 
+  data-track-cta="btn-checkout-keranjang"
+>
+  Beli Sekarang
+</button>`,
+  },
+  {
+    id: "registrasi",
+    title: "Tombol Kirim Formulir Registrasi",
+    icon: Terminal,
+    code: `<button 
+  type="submit" 
+  data-track-cta="form-submit-registrasi"
+>
+  Kirim Data
+</button>`,
+  },
+];
+
 export default function ProjectsPage() {
+  const { currentProject, selectProject, refreshProjects } = useProject();
   const [projects, setProjects] = useState<ProjectData[]>([]);
-  const [selectedProject, setSelectedProject] = useState<ProjectData | null>(
-    null,
-  );
+  const [selectedProject, setSelectedProject] = useState<ProjectData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [selectedFramework, setSelectedFramework] = useState(
-    FRAMEWORK_SNIPPETS[0].id,
-  );
+  const [copiedScript, setCopiedScript] = useState(false);
+  const [copiedSnippetId, setCopiedSnippetId] = useState<string | null>(null);
+  const [selectedFramework, setSelectedFramework] = useState("vite");
   const [trackingMode, setTrackingMode] = useState<"smart" | "manual">("smart");
 
-  // Form State untuk Tambah Project Baru
+  // Form Tambah Project
   const [projectName, setProjectName] = useState("");
   const [projectDomain, setProjectDomain] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -148,7 +201,7 @@ export default function ProjectsPage() {
     text: string;
   } | null>(null);
 
-  // Fetch daftar project milik user langsung dari D1
+  // 1. Fetch Projects
   const fetchProjects = useCallback(async () => {
     try {
       setLoading(true);
@@ -160,8 +213,12 @@ export default function ProjectsPage() {
         const json = await res.json();
         const list: ProjectData[] = json.data || [];
         setProjects(list);
-        if (list.length > 0 && !selectedProject) {
-          setSelectedProject(list[0]);
+        if (list.length > 0) {
+          const targetId = currentProject?.id;
+          const match = list.find((p) => p.id === targetId) || list[0];
+          setSelectedProject(match);
+        } else {
+          setSelectedProject(null);
         }
       }
     } catch (err) {
@@ -169,26 +226,35 @@ export default function ProjectsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedProject]);
+  }, [currentProject?.id]);
 
   useEffect(() => {
     fetchProjects();
   }, [fetchProjects]);
 
-  // Handle pembuatan project baru
+  // Sync saat workspace berganti dari TopHeader
+  useEffect(() => {
+    if (currentProject && projects.length > 0) {
+      const match = projects.find((p) => p.id === currentProject.id);
+      if (match && selectedProject?.id !== match.id) {
+        setSelectedProject(match);
+      }
+    }
+  }, [currentProject, projects, selectedProject?.id]);
+
+  // 2. Tambah Project Baru
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!projectName.trim() || !projectDomain.trim()) {
-      setMessage({
-        type: "error",
-        text: "Nama project dan domain wajib diisi!",
-      });
-      return;
-    }
+    if (!projectName.trim() || !projectDomain.trim()) return;
 
     try {
       setIsSubmitting(true);
       setMessage(null);
+
+      const origins = projectDomain
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
 
       const res = await fetch("/api/track/projects", {
         method: "POST",
@@ -196,45 +262,46 @@ export default function ProjectsPage() {
         credentials: "include",
         body: JSON.stringify({
           name: projectName.trim(),
-          domain: projectDomain.trim(),
+          allowedOrigins: origins,
         }),
       });
 
       const json = await res.json();
 
-      if (res.ok && json.success) {
-        setMessage({
-          type: "success",
-          text: `Project "${projectName}" berhasil didaftarkan!`,
-        });
-        setProjectName("");
-        setProjectDomain("");
-        const newProj = json.data;
-        setProjects((prev) => [newProj, ...prev]);
-        setSelectedProject(newProj);
-      } else {
-        setMessage({
-          type: "error",
-          text: json.error || "Gagal membuat project",
-        });
+      if (!res.ok) {
+        throw new Error(json.error || "Gagal membuat project baru.");
+      }
+
+      setMessage({
+        type: "success",
+        text: `Project "${projectName}" berhasil didaftarkan.`,
+      });
+
+      const newProj = json.data;
+      setProjectName("");
+      setProjectDomain("");
+      await refreshProjects();
+      await fetchProjects();
+      if (newProj?.id) {
+        selectProject(newProj.id);
       }
     } catch (err: any) {
       setMessage({
         type: "error",
-        text: err.message || "Terjadi kesalahan jaringan",
+        text: err.message || "Terjadi kesalahan saat membuat project.",
       });
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Edit State & Handlers
+  // State Modal Edit Project
   const [editingProject, setEditingProject] = useState<ProjectData | null>(null);
   const [editName, setEditName] = useState("");
   const [editDomain, setEditDomain] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
 
-  // Delete State & Handlers
+  // State Modal Hapus Project
   const [deletingProject, setDeletingProject] = useState<ProjectData | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -250,35 +317,31 @@ export default function ProjectsPage() {
 
     try {
       setIsUpdating(true);
+      const origins = editDomain
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+
       const res = await fetch(`/api/track/projects/${editingProject.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
           name: editName.trim(),
-          domain: editDomain.trim(),
+          allowedOrigins: origins,
         }),
       });
 
       const data = await res.json();
-      if (res.ok && data.success) {
-        setMessage({
-          type: "success",
-          text: `Project "${editName}" berhasil diperbarui!`,
-        });
-        setEditingProject(null);
-        await fetchProjects();
-      } else {
-        setMessage({
-          type: "error",
-          text: data.error || "Gagal memperbarui project",
-        });
+      if (!res.ok) {
+        throw new Error(data.error || "Gagal memperbarui data project.");
       }
+
+      setEditingProject(null);
+      await refreshProjects();
+      await fetchProjects();
     } catch (err: any) {
-      setMessage({
-        type: "error",
-        text: err.message || "Gagal menghubungi server",
-      });
+      alert(err.message || "Gagal memperbarui project.");
     } finally {
       setIsUpdating(false);
     }
@@ -295,121 +358,130 @@ export default function ProjectsPage() {
       });
 
       const data = await res.json();
-      if (res.ok && data.success) {
-        setMessage({
-          type: "success",
-          text: `Project "${deletingProject.name}" berhasil dihapus.`,
-        });
-        if (selectedProject?.id === deletingProject.id) {
-          setSelectedProject(null);
-        }
-        setDeletingProject(null);
-        await fetchProjects();
-      } else {
-        setMessage({
-          type: "error",
-          text: data.error || "Gagal menghapus project",
-        });
+      if (!res.ok) {
+        throw new Error(data.error || "Gagal menghapus project.");
       }
+
+      setDeletingProject(null);
+      await refreshProjects();
+      await fetchProjects();
     } catch (err: any) {
-      setMessage({
-        type: "error",
-        text: err.message || "Gagal menghubungi server",
-      });
+      alert(err.message || "Gagal menghapus project.");
     } finally {
       setIsDeleting(false);
     }
   };
 
-  // State & Handlers: Secret API Keys (Headless API Access)
-  const [apiKeys, setApiKeys] = useState<ProjectApiKey[]>([]);
-  const [loadingKeys, setLoadingKeys] = useState(false);
-  const [isCreatingKey, setIsCreatingKey] = useState(false);
-  const [newKeyName, setNewKeyName] = useState("");
-  const [showCreateKeyModal, setShowCreateKeyModal] = useState(false);
-  const [createdKeyData, setCreatedKeyData] = useState<{ id: string; name: string; rawKey: string; keyPrefix: string } | null>(null);
-  const [copiedKey, setCopiedKey] = useState(false);
-  const [deletingKeyId, setDeletingKeyId] = useState<string | null>(null);
+  // 3. Multi-User RBAC (Project Members)
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteIdentifier, setInviteIdentifier] = useState("");
+  const [inviteRole, setInviteRole] = useState<"editor" | "viewer">("editor");
+  const [isInviting, setIsInviting] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [deletingMemberId, setDeletingMemberId] = useState<string | null>(null);
 
-  const fetchApiKeys = useCallback(async (projId: string) => {
+  const fetchMembers = useCallback(async (pid: string) => {
     try {
-      setLoadingKeys(true);
-      const res = await fetch(`/api/track/projects/${projId}/keys`, {
-        credentials: "include",
-        cache: "no-store",
+      setLoadingMembers(true);
+      const res = await fetch(`/api/track/projects/${pid}/members`, {
+        credentials: 'include',
+        cache: 'no-store',
       });
       if (res.ok) {
         const json = await res.json();
-        setApiKeys(json.data || []);
+        setMembers(json.data || []);
       } else {
-        setApiKeys([]);
+        setMembers([]);
       }
-    } catch {
-      setApiKeys([]);
+    } catch (err) {
+      console.warn('[ProjectsPage] Failed to fetch members:', err);
     } finally {
-      setLoadingKeys(false);
+      setLoadingMembers(false);
     }
   }, []);
 
   useEffect(() => {
     if (selectedProject?.id) {
-      fetchApiKeys(selectedProject.id);
+      fetchMembers(selectedProject.id);
     } else {
-      setApiKeys([]);
+      setMembers([]);
     }
-  }, [selectedProject?.id, fetchApiKeys]);
+  }, [selectedProject?.id, fetchMembers]);
 
-  const handleCreateApiKey = async (e: React.FormEvent) => {
+  const handleInviteMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProject) return;
+    if (!selectedProject || !inviteIdentifier.trim()) return;
+
     try {
-      setIsCreatingKey(true);
-      const res = await fetch(`/api/track/projects/${selectedProject.id}/keys`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ name: newKeyName.trim() || "Secret Key" }),
+      setIsInviting(true);
+      setInviteError(null);
+      const res = await fetch(`/api/track/projects/${selectedProject.id}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          identifier: inviteIdentifier.trim(),
+          role: inviteRole,
+        }),
       });
+
       const json = await res.json();
-      if (res.ok && json.success) {
-        setCreatedKeyData(json.key);
-        setShowCreateKeyModal(false);
-        setNewKeyName("");
-        await fetchApiKeys(selectedProject.id);
-      } else {
-        setMessage({ type: "error", text: json.error || "Gagal membuat Secret Key" });
+      if (!res.ok) {
+        throw new Error(json.error || 'Gagal menambahkan anggota tim.');
       }
+
+      setShowInviteModal(false);
+      setInviteIdentifier('');
+      fetchMembers(selectedProject.id);
     } catch (err: any) {
-      setMessage({ type: "error", text: err.message || "Gagal menghubungi server" });
+      setInviteError(err.message || 'Terjadi kesalahan saat mengundang.');
     } finally {
-      setIsCreatingKey(false);
+      setIsInviting(false);
     }
   };
 
-  const handleDeleteApiKey = async (keyId: string) => {
+  const handleUpdateMemberRole = async (memberId: string, newRole: "editor" | "viewer") => {
     if (!selectedProject) return;
     try {
-      setDeletingKeyId(keyId);
-      const res = await fetch(`/api/track/projects/${selectedProject.id}/keys/${keyId}`, {
-        method: "DELETE",
-        credentials: "include",
+      const res = await fetch(`/api/track/projects/${selectedProject.id}/members/${memberId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ role: newRole }),
       });
       const json = await res.json();
-      if (res.ok && json.success) {
-        setMessage({ type: "success", text: "Secret API Key berhasil dicabut/dihapus." });
-        await fetchApiKeys(selectedProject.id);
-      } else {
-        setMessage({ type: "error", text: json.error || "Gagal menghapus API Key" });
-      }
+      if (!res.ok) throw new Error(json.error || 'Gagal mengubah hak akses');
+      fetchMembers(selectedProject.id);
     } catch (err: any) {
-      setMessage({ type: "error", text: err.message || "Gagal menghubungi server" });
-    } finally {
-      setDeletingKeyId(null);
+      alert(err.message || 'Gagal mengubah peran anggota');
     }
   };
 
+  const handleRemoveMember = async (memberId: string) => {
+    if (!selectedProject) return;
+    if (!confirm('Apakah Anda yakin ingin mencabut hak akses anggota ini?')) return;
+
+    try {
+      setDeletingMemberId(memberId);
+      const res = await fetch(`/api/track/projects/${selectedProject.id}/members/${memberId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Gagal menghapus anggota');
+      fetchMembers(selectedProject.id);
+    } catch (err: any) {
+      alert(err.message || 'Gagal menghapus anggota');
+    } finally {
+      setDeletingMemberId(null);
+    }
+  };
+
+  // Kalkulasi snippet aktif
   const activeSnippet =
-    FRAMEWORK_SNIPPETS.find((f) => f.id === selectedFramework) ||
+    FRAMEWORK_SNIPPETS.find((fw) => fw.id === selectedFramework) ||
     FRAMEWORK_SNIPPETS[0];
   const currentPid = selectedProject?.id || "PROJECT_ID_ANDA";
   const currentKey = selectedProject?.writeKey || "WRITE_KEY_ANDA";
@@ -419,10 +491,16 @@ export default function ProjectsPage() {
     trackingMode === "smart"
   );
 
-  const copyToClipboard = () => {
+  const copyScriptToClipboard = () => {
     navigator.clipboard.writeText(displayCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setCopiedScript(true);
+    setTimeout(() => setCopiedScript(false), 2000);
+  };
+
+  const copySnippetToClipboard = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedSnippetId(id);
+    setTimeout(() => setCopiedSnippetId(null), 2000);
   };
 
   return (
@@ -435,7 +513,7 @@ export default function ProjectsPage() {
               <Layers className="w-4 h-4" />
             </div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900">
-              Manajemen Project &amp; Pemasangan Script
+              Manajemen Project &amp; Integrasi
             </h1>
           </div>
           <p className="text-xs text-zinc-500 leading-relaxed pl-10.5">
@@ -534,7 +612,7 @@ export default function ProjectsPage() {
               <span>Daftar Project Aktif Milik Anda ({projects.length})</span>
             </h2>
             <p className="text-xs text-zinc-500 mt-0.5">
-              Pilih proyek untuk melihat panduan instalasi script dan write key terkait
+              Pilih proyek di bawah untuk mengganti workspace aktif dan melihat panduan instalasi script.
             </p>
           </div>
         </div>
@@ -558,7 +636,10 @@ export default function ProjectsPage() {
             {projects.map((proj) => (
               <div
                 key={proj.id}
-                onClick={() => setSelectedProject(proj)}
+                onClick={() => {
+                  setSelectedProject(proj);
+                  selectProject(proj.id);
+                }}
                 className={`border rounded-xl p-5 transition-all cursor-pointer ${
                   selectedProject?.id === proj.id
                     ? "bg-white border-zinc-900 ring-1 ring-zinc-900 shadow-sm"
@@ -574,33 +655,50 @@ export default function ProjectsPage() {
                       {proj.id}
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                    {proj.role && (
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                          proj.role === 'owner'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : proj.role === 'editor'
+                            ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                            : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                        }`}
+                      >
+                        {proj.role.toUpperCase()}
+                      </span>
+                    )}
                     <span className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-semibold flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                       Aktif
                     </span>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleStartEdit(proj);
-                      }}
-                      className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-900 hover:bg-zinc-200/60 transition-colors cursor-pointer"
-                      title="Ubah data project"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeletingProject(proj);
-                      }}
-                      className="p-1.5 rounded-md text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                      title="Hapus project"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {(!proj.role || proj.role === 'owner') && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleStartEdit(proj);
+                          }}
+                          className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-900 hover:bg-zinc-200/60 transition-colors cursor-pointer"
+                          title="Ubah data project"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeletingProject(proj);
+                          }}
+                          className="p-1.5 rounded-md text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                          title="Hapus project"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -638,57 +736,67 @@ export default function ProjectsPage() {
         )}
       </div>
 
-      {/* Secret API Keys Card (Headless Data Export / Read API) */}
+      {/* Kartu Manajemen Anggota Tim & Hak Akses (Multi-User RBAC) */}
       {selectedProject && (
         <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-zinc-900 text-white flex items-center justify-center">
-                  <Lock className="w-3.5 h-3.5" />
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                  <Users className="w-3.5 h-3.5" />
                 </div>
                 <h2 className="text-sm font-bold text-zinc-900">
-                  Secret API Key (Konsumsi Data Eksternal)
+                  Anggota Tim &amp; Hak Akses (RBAC)
                 </h2>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 font-semibold font-mono">
-                  Project: {selectedProject.id}
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 font-semibold font-mono">
+                  {selectedProject.name}
                 </span>
+                {selectedProject.role && (
+                  <span
+                    className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
+                      selectedProject.role === 'owner'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : selectedProject.role === 'editor'
+                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                        : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                    }`}
+                  >
+                    Peran Anda: {selectedProject.role.toUpperCase()}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-zinc-500">
-                Gunakan kunci ini pada server backend aplikasi Anda yang lain (Laravel, Node.js, Python, Flutter) untuk menarik metrik dan event secara terprogram.
+                Atur kolaborasi multi-user untuk brand atau klien agensi. Owner memiliki akses penuh, Editor mengelola koneksi media sosial &amp; kampanye, Viewer hanya melihat metrik.
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
-              <Link
-                href="/dashboard/docs#api"
-                className="h-8 px-3 text-xs text-zinc-600 hover:text-zinc-900 bg-white border border-zinc-200 rounded-lg hover:bg-zinc-50 transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
-              >
-                <Server className="w-3.5 h-3.5 text-zinc-500" />
-                <span>Dokumentasi API</span>
-                <ExternalLink className="w-3 h-3 text-zinc-400" />
-              </Link>
+            {(!selectedProject.role || selectedProject.role === 'owner') && (
               <button
                 type="button"
-                onClick={() => setShowCreateKeyModal(true)}
+                onClick={() => {
+                  setInviteIdentifier('');
+                  setInviteRole('editor');
+                  setInviteError(null);
+                  setShowInviteModal(true);
+                }}
                 className="h-8 px-3 text-xs bg-zinc-900 hover:bg-zinc-800 text-white font-medium rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Buat Secret Key</span>
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Undang Anggota</span>
               </button>
-            </div>
+            )}
           </div>
 
-          {loadingKeys ? (
+          {loadingMembers ? (
             <div className="p-4 text-center text-xs text-zinc-400">
-              Memuat daftar API Key...
+              Memuat daftar anggota tim...
             </div>
-          ) : apiKeys.length === 0 ? (
+          ) : members.length === 0 ? (
             <div className="p-6 rounded-lg border border-dashed border-zinc-200 bg-zinc-50/50 text-center space-y-2">
-              <Shield className="w-6 h-6 text-zinc-400 mx-auto" />
-              <div className="text-xs font-semibold text-zinc-700">Belum ada Secret Key untuk project ini</div>
+              <Users className="w-6 h-6 text-zinc-400 mx-auto" />
+              <div className="text-xs font-semibold text-zinc-700">Belum ada anggota tim terdaftar</div>
               <p className="text-[11px] text-zinc-500 max-w-md mx-auto">
-                Buat Secret Key untuk menghubungkan analitik proyek ini ke aplikasi Anda yang lain via REST API.
+                Undang staf atau klien Anda dengan memasukkan email atau username akun Firenalytics mereka.
               </p>
             </div>
           ) : (
@@ -696,47 +804,84 @@ export default function ProjectsPage() {
               <table className="w-full text-left text-xs text-zinc-700">
                 <thead className="text-[11px] uppercase tracking-wider bg-zinc-50 text-zinc-500 border-b border-zinc-200">
                   <tr>
-                    <th className="px-4 py-2.5 font-semibold">Nama Kunci</th>
-                    <th className="px-4 py-2.5 font-semibold">Prefix Kunci</th>
-                    <th className="px-4 py-2.5 font-semibold">Izin (Scope)</th>
-                    <th className="px-4 py-2.5 font-semibold">Dibuat Pada</th>
-                    <th className="px-4 py-2.5 font-semibold">Terakhir Digunakan</th>
+                    <th className="px-4 py-2.5 font-semibold">Nama / Pengguna</th>
+                    <th className="px-4 py-2.5 font-semibold">Email</th>
+                    <th className="px-4 py-2.5 font-semibold">Peran (Role)</th>
+                    <th className="px-4 py-2.5 font-semibold">Bergabung Pada</th>
                     <th className="px-4 py-2.5 font-semibold text-right">Aksi</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-200 bg-white font-mono text-[11px]">
-                  {apiKeys.map((k) => (
-                    <tr key={k.id} className="hover:bg-zinc-50 transition-colors">
-                      <td className="px-4 py-2.5 font-sans font-medium text-zinc-900 text-xs">
-                        {k.name}
-                      </td>
-                      <td className="px-4 py-2.5 text-zinc-600">
-                        <code>{k.key_prefix}</code>
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <span className="px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200 text-[10px]">
-                          metrics:read
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-zinc-500 font-sans text-xs">
-                        {new Date(k.created_at).toLocaleDateString("id-ID")}
-                      </td>
-                      <td className="px-4 py-2.5 text-zinc-500 font-sans text-xs">
-                        {k.last_used_at ? new Date(k.last_used_at).toLocaleString("id-ID") : "Belum pernah"}
-                      </td>
-                      <td className="px-4 py-2.5 text-right font-sans">
-                        <button
-                          type="button"
-                          disabled={deletingKeyId === k.id}
-                          onClick={() => handleDeleteApiKey(k.id)}
-                          className="p-1 rounded text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-50"
-                          title="Cabut / Hapus Kunci ini"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                <tbody className="divide-y divide-zinc-200 bg-white text-xs">
+                  {members.map((m) => {
+                    const isMemberOwner = m.role === 'owner' || m.isOwner;
+                    const canManage = (!selectedProject.role || selectedProject.role === 'owner') && !isMemberOwner;
+
+                    return (
+                      <tr key={m.id || m.userId} className="hover:bg-zinc-50 transition-colors">
+                        <td className="px-4 py-3 font-medium text-zinc-900">
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-zinc-200 text-zinc-800 font-semibold flex items-center justify-center text-[10px]">
+                              {(m.name || m.username || 'U').charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="font-semibold leading-tight">{m.name || m.username}</div>
+                              <div className="text-[10px] text-zinc-400 font-mono">@{m.username}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-zinc-600">
+                          {m.email}
+                        </td>
+                        <td className="px-4 py-3">
+                          {isMemberOwner ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1 w-fit">
+                              <Shield className="w-2.5 h-2.5 text-emerald-600" />
+                              OWNER
+                            </span>
+                          ) : canManage ? (
+                            <select
+                              value={m.role}
+                              onChange={(e) => handleUpdateMemberRole(m.id, e.target.value as 'editor' | 'viewer')}
+                              className="px-2 py-1 rounded text-[11px] font-semibold border border-zinc-200 bg-white text-zinc-800 focus:outline-none cursor-pointer"
+                            >
+                              <option value="editor">EDITOR (Akses Penuh Fitur)</option>
+                              <option value="viewer">VIEWER (Hanya Lihat)</option>
+                            </select>
+                          ) : (
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold border inline-block ${
+                                m.role === 'editor'
+                                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                  : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                              }`}
+                            >
+                              {m.role.toUpperCase()}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-500 text-[11px]">
+                          {m.createdAt ? new Date(m.createdAt).toLocaleDateString('id-ID') : '-'}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {canManage ? (
+                            <button
+                              type="button"
+                              disabled={deletingMemberId === m.id}
+                              onClick={() => handleRemoveMember(m.id)}
+                              className="p-1 rounded text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-50"
+                              title="Cabut akses anggota ini"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          ) : isMemberOwner ? (
+                            <span className="text-[10px] text-zinc-400 font-medium italic">Pemilik Proyek</span>
+                          ) : (
+                            <span className="text-[10px] text-zinc-400 italic">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -753,30 +898,20 @@ export default function ProjectsPage() {
               <span>Panduan Pasang Script per Framework</span>
             </h2>
             <p className="text-xs text-zinc-500">
-              Pilih framework website Anda di bawah ini, lalu salin kodenya ke
-              file yang ditentukan.
+              Pilih framework website Anda di bawah ini, lalu salin kodenya ke file yang ditentukan.
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-zinc-500 font-medium">
-              Pilih Project:
-            </label>
-            <select
-              value={selectedProject?.id || ""}
-              onChange={(e) => {
-                const found = projects.find((p) => p.id === e.target.value);
-                if (found) setSelectedProject(found);
-              }}
-              className="bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs rounded-lg px-3 py-1.5 font-medium focus:outline-none focus:border-zinc-400 cursor-pointer"
-            >
-              {projects.map((proj) => (
-                <option key={proj.id} value={proj.id}>
-                  {proj.name} ({proj.id})
-                </option>
-              ))}
-            </select>
-          </div>
+          {selectedProject && (
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-zinc-100 border border-zinc-200 text-xs">
+              <Building2 className="w-3.5 h-3.5 text-zinc-500" />
+              <span className="text-zinc-500 font-medium">Workspace Aktif:</span>
+              <span className="font-bold text-zinc-900">{selectedProject.name}</span>
+              <code className="text-[10px] font-mono text-zinc-600 bg-white px-1.5 py-0.5 rounded border border-zinc-200">
+                {selectedProject.id}
+              </code>
+            </div>
+          )}
         </div>
 
         {/* Tab Selector Framework */}
@@ -801,7 +936,7 @@ export default function ProjectsPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-zinc-50 border border-zinc-200 rounded-xl">
           <div className="space-y-0.5">
             <span className="text-xs font-bold text-zinc-900 flex items-center gap-1.5">
-              <span>Pilih Mode Pelacakan Script</span>
+              <span>Pilihan Mode Pelacakan Script</span>
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-700">
                 {trackingMode === 'smart' ? 'data-auto-capture="true"' : 'data-auto-capture="false"'}
               </span>
@@ -865,10 +1000,10 @@ export default function ProjectsPage() {
 
           <button
             type="button"
-            onClick={copyToClipboard}
+            onClick={copyScriptToClipboard}
             className="absolute top-3 right-3 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 text-xs font-medium flex items-center gap-1.5 transition-all active:scale-[0.98] shadow-sm cursor-pointer"
           >
-            {copied ? (
+            {copiedScript ? (
               <>
                 <Check className="w-3.5 h-3.5 text-emerald-400" />
                 <span className="text-emerald-400">Tersalin!</span>
@@ -882,7 +1017,7 @@ export default function ProjectsPage() {
           </button>
         </div>
 
-        {/* Panduan Menandai Tombol & Smart Auto-Capture */}
+        {/* Penjelasan Mode Pelacakan Klik */}
         <div className="rounded-xl bg-zinc-50 border border-zinc-200 p-4 text-xs text-zinc-600 space-y-3">
           <div className="font-semibold text-zinc-900 flex items-center justify-between">
             <div className="flex items-center gap-1.5">
@@ -914,7 +1049,7 @@ export default function ProjectsPage() {
                 )}
               </div>
               <p className="text-[11px] text-zinc-500 leading-relaxed">
-                Tanpa perlu koding manual. Tombol (seperti <em>&quot;Explore&quot;</em>, <em>&quot;Detail&quot;</em>) otomatis dikombinasikan dengan judul kartu produk (contoh: <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">812-explore</code>), dan logo brand mobil (dari tag <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">alt=&quot;Ferrari&quot;</code>) langsung tercatat sebagai <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">brand-ferrari</code>.
+                Tanpa perlu koding manual. Tombol (seperti <em>&quot;Explore&quot;</em>, <em>&quot;Beli&quot;</em>) otomatis dikombinasikan dengan judul kartu produk di sekitarnya, dan logo brand atau link sosial media otomatis terdeteksi.
               </p>
             </div>
 
@@ -937,12 +1072,64 @@ export default function ProjectsPage() {
                 )}
               </div>
               <p className="text-[11px] text-zinc-500 leading-relaxed mb-2">
-                Hanya elemen bertanda khusus yang dilacak. Tambahkan atribut <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">data-track-cta=&quot;nama_tombol&quot;</code> pada tombol Anda:
+                Hanya elemen yang secara eksplisit memiliki atribut <code className="bg-zinc-100 px-1 py-0.5 rounded font-mono text-zinc-800">data-track-cta=&quot;nama_tombol&quot;</code> yang akan dicatat.
               </p>
-              <code className="text-zinc-800 font-mono text-[11px] block bg-zinc-100 p-2 rounded border border-zinc-200 overflow-x-auto">
-                &lt;button data-track-cta=&quot;btn-checkout&quot;&gt;Beli Sekarang&lt;/button&gt;
-              </code>
             </div>
+          </div>
+        </div>
+
+        {/* Contoh Tombol Praktis (Siap Salin) */}
+        <div className="space-y-3 pt-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold text-zinc-900 flex items-center gap-2">
+              <Code2 className="w-3.5 h-3.5 text-zinc-700" />
+              <span>Contoh Elemen Tombol Siap Pakai (Quick Copy)</span>
+            </h3>
+            <span className="text-[11px] text-zinc-400">
+              Salin dan sesuaikan tag HTML di bawah ke template web Anda
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {CTA_BUTTON_EXAMPLES.map((ex) => {
+              const IconComponent = ex.icon;
+              const isCopied = copiedSnippetId === ex.id;
+
+              return (
+                <div
+                  key={ex.id}
+                  className="p-4 rounded-xl bg-zinc-50/80 border border-zinc-200 space-y-2 flex flex-col justify-between"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold text-zinc-800 flex items-center gap-1.5">
+                      <IconComponent className="w-3.5 h-3.5 text-zinc-500" />
+                      <span>{ex.title}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copySnippetToClipboard(ex.id, ex.code)}
+                      className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-zinc-200 hover:border-zinc-300 text-zinc-700 hover:text-zinc-900 transition-colors cursor-pointer flex items-center gap-1 shadow-2xs active:scale-[0.98]"
+                    >
+                      {isCopied ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-600" />
+                          <span className="text-emerald-700">Tersalin!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3 text-zinc-500" />
+                          <span>Salin</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <pre className="p-3 rounded-lg bg-zinc-900 text-[11px] font-mono text-zinc-200 overflow-x-auto leading-relaxed border border-zinc-800">
+                    {ex.code}
+                  </pre>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -1072,137 +1259,102 @@ export default function ProjectsPage() {
         </div>
       )}
 
-      {/* Modal Dialog: Buat Secret API Key Baru */}
-      {showCreateKeyModal && selectedProject && (
-        <div className="fixed inset-0 z-50 bg-zinc-950/20 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-xl max-w-md w-full space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-              <div className="flex items-center gap-2">
-                <Lock className="w-4 h-4 text-zinc-900" />
-                <h3 className="text-sm font-bold text-zinc-900">Buat Secret Key Baru</h3>
+      {/* Modal: Undang Anggota Tim ke Workspace (RBAC) */}
+      {showInviteModal && selectedProject && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+          style={{ width: '100vw', height: '100vh', margin: 0, top: 0, left: 0, right: 0, bottom: 0 }}
+          onClick={() => setShowInviteModal(false)}
+        >
+          <div
+            className="bg-white border border-zinc-200 rounded-2xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/70">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                  <UserPlus className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-zinc-900">
+                    Undang Anggota Tim
+                  </h3>
+                  <p className="text-[11px] text-zinc-500">
+                    Workspace: <strong>{selectedProject.name}</strong>
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
-                onClick={() => setShowCreateKeyModal(false)}
-                className="text-zinc-400 hover:text-zinc-700 p-1 rounded-md cursor-pointer"
+                onClick={() => setShowInviteModal(false)}
+                className="w-7 h-7 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 flex items-center justify-center text-sm font-bold cursor-pointer"
               >
-                <X className="w-4 h-4" />
+                ✕
               </button>
             </div>
 
-            <form onSubmit={handleCreateApiKey} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-zinc-700">Nama Identifier Kunci</label>
+            <form onSubmit={handleInviteMember} className="p-5 space-y-4 text-xs">
+              {inviteError && (
+                <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                  <span>{inviteError}</span>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="block font-semibold text-zinc-800">
+                  Email atau Username Pengguna
+                </label>
                 <input
                   type="text"
-                  placeholder="Contoh: Server Laravel / Aplikasi Mobile"
-                  value={newKeyName}
-                  onChange={(e) => setNewKeyName(e.target.value)}
-                  className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900"
                   required
+                  value={inviteIdentifier}
+                  onChange={(e) => setInviteIdentifier(e.target.value)}
+                  placeholder="Contoh: tim@agensi.com atau alex_dev"
+                  className="w-full px-3 py-2 text-xs border border-zinc-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-400 bg-white text-zinc-900"
                   autoFocus
                 />
-                <p className="text-[11px] text-zinc-500">
-                  Digunakan untuk mengidentifikasi server atau aplikasi yang menggunakan kunci ini.
+                <p className="text-[11px] text-zinc-400">
+                  Pastikan pengguna tersebut telah memiliki akun di Firenalytics.
                 </p>
               </div>
 
-              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-lg text-xs space-y-1 text-zinc-600">
-                <div className="font-semibold text-zinc-900 flex items-center gap-1.5">
-                  <Shield className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Izin Akses (Scope): Read-Only</span>
-                </div>
-                <p className="text-[11px] text-zinc-500">
-                  Kunci ini hanya diizinkan membaca metrik dan ringkasan CTA proyek <code className="font-mono text-zinc-800">{selectedProject.id}</code>.
-                </p>
+              <div className="space-y-1.5">
+                <label className="block font-semibold text-zinc-800">
+                  Peran &amp; Hak Akses
+                </label>
+                <select
+                  value={inviteRole}
+                  onChange={(e) => setInviteRole(e.target.value as 'editor' | 'viewer')}
+                  className="w-full px-3 py-2 text-xs border border-zinc-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-400 bg-white text-zinc-900 cursor-pointer"
+                >
+                  <option value="editor">Editor — Akses Operasional Penuh (Hubungkan Akun, Link-in-Bio, Sinkronisasi)</option>
+                  <option value="viewer">Viewer — Akses Lihat Saja (Melihat Grafik &amp; Unduh Laporan)</option>
+                </select>
+              </div>
+
+              <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 text-zinc-600 text-[11px] leading-relaxed">
+                Anggota yang diundang akan langsung dapat memilih workspace <strong>{selectedProject.name}</strong> di menu atas (TopHeader) setelah undangan terkirim.
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
                 <button
                   type="button"
-                  onClick={() => setShowCreateKeyModal(false)}
-                  className="px-3.5 py-2 rounded-lg text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 cursor-pointer"
+                  onClick={() => setShowInviteModal(false)}
+                  className="px-4 py-2 rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50 font-semibold cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  disabled={isCreatingKey}
-                  className="px-4 py-2 rounded-lg text-xs font-medium bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  disabled={isInviting}
+                  className="px-4 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-60 shadow-xs"
                 >
-                  {isCreatingKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                  <span>{isCreatingKey ? "Membuat..." : "Buat Kunci"}</span>
+                  {isInviting ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />}
+                  <span>{isInviting ? 'Mengirim...' : 'Kirim Undangan'}</span>
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Dialog: Kunci Baru Berhasil Dibuat (One-Time Display) */}
-      {createdKeyData && (
-        <div className="fixed inset-0 z-50 bg-zinc-950/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-2xl max-w-lg w-full space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-                <Check className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-zinc-900">Secret Key Berhasil Dibuat!</h3>
-                <p className="text-xs text-zinc-500">Simpan sekarang di berkas konfigurasi (.env) server Anda</p>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div className="space-y-0.5">
-                <strong className="font-semibold block">PENTING: Kunci ini hanya ditampilkan sekali!</strong>
-                <p className="text-[11px] text-amber-800 leading-relaxed">
-                  Demi alasan keamanan, kami tidak menyimpan kunci mentah ini di database kami (hanya hash SHA-256). Jika Anda kehilangan kunci ini, Anda harus membuat kunci baru.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-zinc-700">Secret Key Anda:</label>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 p-2.5 bg-zinc-900 text-emerald-400 font-mono text-xs rounded-lg border border-zinc-800 select-all overflow-x-auto">
-                  {createdKeyData.rawKey}
-                </code>
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(createdKeyData.rawKey);
-                    setCopiedKey(true);
-                    setTimeout(() => setCopiedKey(false), 2000);
-                  }}
-                  className="px-3.5 py-2.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer shadow-sm"
-                >
-                  {copiedKey ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedKey ? "Tersalin!" : "Salin"}</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-lg text-xs text-zinc-600 space-y-1">
-              <div className="font-semibold text-zinc-800">Contoh Penggunaan Header:</div>
-              <code className="font-mono text-[11px] block text-zinc-700">
-                x-api-key: {createdKeyData.rawKey}
-              </code>
-            </div>
-
-            <div className="flex justify-end pt-2 border-t border-zinc-100">
-              <button
-                type="button"
-                onClick={() => {
-                  setCreatedKeyData(null);
-                  setCopiedKey(false);
-                }}
-                className="px-5 py-2 bg-zinc-900 hover:bg-zinc-800 text-white rounded-lg text-xs font-medium cursor-pointer shadow-sm"
-              >
-                Saya Sudah Menyimpan Kunci Ini
-              </button>
-            </div>
           </div>
         </div>
       )}

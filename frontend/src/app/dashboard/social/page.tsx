@@ -51,8 +51,14 @@ import {
   Zap,
   Award,
   Smile,
-  Calendar
+  Calendar,
+  Building2,
+  Tag,
+  Pencil,
+  Lock,
+  X
 } from 'lucide-react';
+import { useProject } from '@/context/ProjectContext';
 
 ChartJS.register(
   CategoryScale,
@@ -68,9 +74,11 @@ ChartJS.register(
 interface SocialConnection {
   id: string;
   user_id: string;
+  project_id?: string | null;
   platform: string;
   composio_connection_id: string;
   account_handle?: string | null;
+  account_label?: string | null;
   status: 'ACTIVE' | 'INITIATED' | 'EXPIRED' | 'REVOKED';
   last_synced_at?: string | null;
   created_at: string;
@@ -360,12 +368,22 @@ const SUPPORTED_PLATFORMS: PlatformDefinition[] = [
 ];
 
 export default function SocialMediaPage() {
+  const { currentProject, userRole } = useProject();
+  const isViewer = userRole === 'viewer';
+
   const [connections, setConnections] = useState<SocialConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // State Ubah Label Akun & Modal Hubungkan Akun Baru
+  const [editingConnId, setEditingConnId] = useState<string | null>(null);
+  const [editingLabelValue, setEditingLabelValue] = useState<string>('');
+  const [savingLabel, setSavingLabel] = useState(false);
+  const [connectModalPlatform, setConnectModalPlatform] = useState<PlatformDefinition | null>(null);
+  const [connectAccountLabel, setConnectAccountLabel] = useState<string>('Akun Utama');
 
   // State Metrik Analitik Real-Time & Grafik
   const [metricsData, setMetricsData] = useState<SocialMetricsData | null>(null);
@@ -440,10 +458,11 @@ export default function SocialMediaPage() {
     return headers;
   }, []);
 
-  // Fetch status koneksi akun media sosial aktif dari D1
+  // Fetch status koneksi akun media sosial aktif dari D1 (terisolasi per Workspace)
   const fetchConnections = useCallback(async () => {
     try {
-      const res = await fetch('/api/composio/status', {
+      const q = currentProject?.id ? `?projectId=${encodeURIComponent(currentProject.id)}` : '';
+      const res = await fetch(`/api/composio/status${q}`, {
         headers: getAuthHeaders(),
         credentials: 'include',
       });
@@ -461,14 +480,18 @@ export default function SocialMediaPage() {
     } finally {
       setLoading(false);
     }
-  }, [getAuthHeaders]);
+  }, [getAuthHeaders, currentProject?.id]);
 
-  // Fetch data metrik analitik & histori time-series dari D1 (Dinamis per Akun Terpilih)
+  // Fetch data metrik analitik & histori time-series dari D1 (Dinamis per Akun Terpilih & Workspace)
   const fetchMetrics = useCallback(async (connId?: string) => {
     try {
       setMetricsLoading(true);
       const targetId = connId !== undefined ? connId : selectedConnectionId;
-      const url = targetId ? `/api/composio/metrics?connectionId=${targetId}` : '/api/composio/metrics';
+      const params = new URLSearchParams();
+      if (targetId) params.append('connectionId', targetId);
+      if (currentProject?.id) params.append('projectId', currentProject.id);
+
+      const url = `/api/composio/metrics?${params.toString()}`;
       const res = await fetch(url, {
         headers: getAuthHeaders(),
         credentials: 'include',
@@ -487,7 +510,7 @@ export default function SocialMediaPage() {
     } finally {
       setMetricsLoading(false);
     }
-  }, [getAuthHeaders, selectedConnectionId]);
+  }, [getAuthHeaders, selectedConnectionId, currentProject?.id]);
 
   // Fetch daftar performa konten video & postingan dari D1
   const fetchPosts = useCallback(async () => {
@@ -498,6 +521,9 @@ export default function SocialMediaPage() {
         params.append('platform', postPlatformFilter);
       }
       params.append('sort', postSortBy);
+      if (currentProject?.id) {
+        params.append('projectId', currentProject.id);
+      }
 
       const res = await fetch(`/api/composio/posts?${params.toString()}`, {
         headers: getAuthHeaders(),
@@ -515,7 +541,7 @@ export default function SocialMediaPage() {
     } finally {
       setPostsLoading(false);
     }
-  }, [getAuthHeaders, postPlatformFilter, postSortBy]);
+  }, [getAuthHeaders, postPlatformFilter, postSortBy, currentProject?.id]);
 
   // Handler: Buka modal dan muat komentar riil untuk postingan spesifik
   const openCommentsModal = useCallback(async (post: SocialPost) => {
@@ -556,6 +582,9 @@ export default function SocialMediaPage() {
       if (selectedConnectionId) {
         params.append('connectionId', selectedConnectionId);
       }
+      if (currentProject?.id) {
+        params.append('projectId', currentProject.id);
+      }
 
       const res = await fetch(`/api/composio/insights?${params.toString()}`, {
         headers: getAuthHeaders(),
@@ -570,7 +599,7 @@ export default function SocialMediaPage() {
     } finally {
       setInsightsLoading(false);
     }
-  }, [getAuthHeaders, postPlatformFilter, selectedConnectionId]);
+  }, [getAuthHeaders, postPlatformFilter, selectedConnectionId, currentProject?.id]);
 
   // Handler: Refresh manual analisis intelijensi AI
   const handleRefreshInsights = async () => {
@@ -597,7 +626,8 @@ export default function SocialMediaPage() {
   const fetchAttribution = useCallback(async () => {
     setAttributionLoading(true);
     try {
-      const res = await fetch('/api/composio/attribution', {
+      const q = currentProject?.id ? `?projectId=${encodeURIComponent(currentProject.id)}` : '';
+      const res = await fetch(`/api/composio/attribution${q}`, {
         headers: getAuthHeaders(),
         credentials: 'include',
       });
@@ -610,13 +640,14 @@ export default function SocialMediaPage() {
     } finally {
       setAttributionLoading(false);
     }
-  }, [getAuthHeaders]);
+  }, [getAuthHeaders, currentProject?.id]);
 
   // Fetch daftar tautan pelacak kampanye Link-in-Bio
   const fetchCampaignLinks = useCallback(async () => {
     setLinksLoading(true);
     try {
-      const res = await fetch('/api/composio/links', {
+      const q = currentProject?.id ? `?projectId=${encodeURIComponent(currentProject.id)}` : '';
+      const res = await fetch(`/api/composio/links${q}`, {
         headers: getAuthHeaders(),
         credentials: 'include',
       });
@@ -629,7 +660,7 @@ export default function SocialMediaPage() {
     } finally {
       setLinksLoading(false);
     }
-  }, [getAuthHeaders]);
+  }, [getAuthHeaders, currentProject?.id]);
 
   // Handler: Buat tautan pelacak baru
   const handleCreateLink = async (e: React.FormEvent) => {
@@ -645,7 +676,10 @@ export default function SocialMediaPage() {
         method: 'POST',
         headers: getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify(linkForm),
+        body: JSON.stringify({
+          ...linkForm,
+          projectId: currentProject?.id || 'prj_default',
+        }),
       });
       const json = await res.json();
       if (res.ok && json.success) {
@@ -664,6 +698,37 @@ export default function SocialMediaPage() {
       alert(err.message || 'Terjadi kesalahan saat membuat tautan');
     } finally {
       setIsCreatingLink(false);
+    }
+  };
+
+  // Handler: Update label akun (multi-account renaming)
+  const handleUpdateLabel = async (connId: string) => {
+    if (!editingLabelValue.trim()) return;
+    setSavingLabel(true);
+    try {
+      const res = await fetch(`/api/composio/connections/${connId}`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ accountLabel: editingLabelValue.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setConnections((prev) =>
+          prev.map((c) => (c.id === connId ? { ...c, account_label: editingLabelValue.trim() } : c))
+        );
+        setEditingConnId(null);
+        setNotification({
+          type: 'success',
+          message: 'Label akun berhasil diperbarui.',
+        });
+      } else {
+        alert(json.error || 'Gagal mengubah label akun');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Gagal mengubah label akun');
+    } finally {
+      setSavingLabel(false);
     }
   };
 
@@ -700,6 +765,11 @@ export default function SocialMediaPage() {
     }
   };
 
+  // Reset selected connection ketika berganti workspace
+  useEffect(() => {
+    setSelectedConnectionId(null);
+  }, [currentProject?.id]);
+
   useEffect(() => {
     fetchConnections();
     fetchMetrics();
@@ -721,13 +791,18 @@ export default function SocialMediaPage() {
       const handleOAuthReturn = async () => {
         setIsSyncing(true);
         const storedPlatform = typeof window !== 'undefined' ? sessionStorage.getItem('connecting_platform') : null;
+        const storedLabel = typeof window !== 'undefined' ? sessionStorage.getItem('connecting_account_label') : null;
+        const storedProjectId = typeof window !== 'undefined' ? sessionStorage.getItem('connecting_project_id') : null;
         const detectedPlatform = (params.get('platform') || storedPlatform || 'instagram').toLowerCase();
+        const detectedProjectId = params.get('project_id') || storedProjectId || currentProject?.id || 'prj_default';
+        const detectedLabel = storedLabel || 'Akun Utama';
+
         const platformObj = SUPPORTED_PLATFORMS.find((p) => p.id === detectedPlatform);
         const platformName = platformObj?.name || detectedPlatform.toUpperCase();
 
         setNotification({
           type: 'success',
-          message: `⚡ Akun ${platformName} berhasil diotorisasi! Menyinkronkan data metrik secara otomatis...`,
+          message: `⚡ Akun ${platformName} ("${detectedLabel}") berhasil diotorisasi! Menyinkronkan data metrik secara otomatis...`,
         });
 
         try {
@@ -739,6 +814,8 @@ export default function SocialMediaPage() {
               connectedAccountId: connectedAccountId || '',
               status: statusParam || 'success',
               platform: detectedPlatform,
+              projectId: detectedProjectId,
+              accountLabel: detectedLabel,
             }),
           });
 
@@ -751,7 +828,7 @@ export default function SocialMediaPage() {
           if (res.ok && json.success) {
             setNotification({
               type: 'success',
-              message: `🎉 Akun ${platformName} berhasil terhubung! Data analitik awal telah disinkronkan secara otomatis.`,
+              message: `🎉 Akun ${platformName} ("${detectedLabel}") berhasil terhubung! Data analitik awal telah disinkronkan secara otomatis.`,
             });
           } else {
             // Fallback sinkronisasi manual jika callback mengalami kendala
@@ -774,6 +851,8 @@ export default function SocialMediaPage() {
         } finally {
           if (typeof window !== 'undefined') {
             sessionStorage.removeItem('connecting_platform');
+            sessionStorage.removeItem('connecting_account_label');
+            sessionStorage.removeItem('connecting_project_id');
           }
           setIsSyncing(false);
           await fetchConnections();
@@ -786,15 +865,20 @@ export default function SocialMediaPage() {
 
       handleOAuthReturn();
     }
-  }, [getAuthHeaders, fetchConnections, fetchMetrics, fetchPosts]);
+  }, [getAuthHeaders, fetchConnections, fetchMetrics, fetchPosts, currentProject?.id]);
 
-  // Handler: Mulai alur otorisasi OAuth via Composio v3
-  const handleConnect = async (platformId: string) => {
+  // Handler: Mulai alur otorisasi OAuth via Composio v3 dengan label dan projectId
+  const handleConnect = async (platformId: string, customLabel?: string) => {
     setConnectingPlatform(platformId);
     setNotification(null);
 
+    const labelToUse = customLabel || connectAccountLabel || 'Akun Utama';
+    const targetProjectId = currentProject?.id || 'prj_default';
+
     if (typeof window !== 'undefined') {
       sessionStorage.setItem('connecting_platform', platformId);
+      sessionStorage.setItem('connecting_account_label', labelToUse);
+      sessionStorage.setItem('connecting_project_id', targetProjectId);
     }
 
     try {
@@ -804,7 +888,9 @@ export default function SocialMediaPage() {
         credentials: 'include',
         body: JSON.stringify({
           platform: platformId,
-          callbackUrl: `${window.location.origin}${window.location.pathname}?platform=${platformId}`,
+          projectId: targetProjectId,
+          accountLabel: labelToUse,
+          callbackUrl: `${window.location.origin}${window.location.pathname}?platform=${platformId}&project_id=${targetProjectId}`,
         }),
       });
 
@@ -826,11 +912,12 @@ export default function SocialMediaPage() {
       if (json.data && json.data.redirectUrl) {
         setNotification({
           type: 'success',
-          message: `Menghubungkan ke ${platformId.toUpperCase()}... Jika popup terblokir, izinkan pembukaan jendela baru.`,
+          message: `Menghubungkan ke ${platformId.toUpperCase()} ("${labelToUse}")... Jika popup terblokir, izinkan pembukaan jendela baru.`,
         });
         
         // Buka URL otorisasi di tab baru untuk otorisasi aman
         window.open(json.data.redirectUrl, '_blank');
+        setConnectModalPlatform(null);
         
         // Refresh daftar koneksi secara bertahap
         setTimeout(() => fetchConnections(), 2000);
@@ -1030,13 +1117,25 @@ export default function SocialMediaPage() {
       {/* Unified Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="space-y-1">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-zinc-100 border border-zinc-200 text-zinc-900 flex items-center justify-center shrink-0">
               <Share2 className="w-4 h-4" />
             </div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900">
               Analitik Media Sosial
             </h1>
+            {currentProject && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-700 border border-zinc-200">
+                <Building2 className="w-3 h-3 text-zinc-500" />
+                <span>{currentProject.name}</span>
+              </span>
+            )}
+            {isViewer && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200" title="Anda hanya memiliki izin melihat. Tidak dapat menambah/mengedit akun.">
+                <Lock className="w-2.5 h-2.5 text-amber-600" />
+                Mode Viewer
+              </span>
+            )}
           </div>
           <p className="text-xs text-zinc-500 leading-relaxed pl-10.5">
             Pantau performa, pertumbuhan audiens, dan interaksi konten dari seluruh akun media sosial Anda.
@@ -1061,7 +1160,8 @@ export default function SocialMediaPage() {
                   .filter((c) => c.status === 'ACTIVE')
                   .map((conn) => (
                     <option key={conn.id} value={conn.id}>
-                      {conn.platform.toUpperCase()}: {conn.account_handle || 'Akun Terhubung'}
+                      {conn.platform.toUpperCase()}
+                      {conn.account_label ? ` [${conn.account_label}]` : ''}: {conn.account_handle || 'Akun Terhubung'}
                     </option>
                   ))}
               </select>
@@ -1814,14 +1914,21 @@ export default function SocialMediaPage() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setIsLinkModalOpen(true)}
-            className="px-3.5 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs active:scale-[0.98] self-start sm:self-auto"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Buat Tautan Pelacak (Link-in-Bio)</span>
-          </button>
+          {!isViewer ? (
+            <button
+              type="button"
+              onClick={() => setIsLinkModalOpen(true)}
+              className="px-3.5 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs active:scale-[0.98] self-start sm:self-auto"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Buat Tautan Pelacak (Link-in-Bio)</span>
+            </button>
+          ) : (
+            <div className="px-3 py-1.5 rounded-lg bg-zinc-100 border border-zinc-200 text-zinc-500 text-xs flex items-center gap-1.5">
+              <Lock className="w-3 h-3 text-zinc-400" />
+              <span>Pembuatan Link Dibatasi (Viewer)</span>
+            </div>
+          )}
         </div>
 
         {/* 4 Kartu KPI Atribusi Teratas */}
@@ -1962,14 +2069,16 @@ export default function SocialMediaPage() {
 
             {campaignLinks.length === 0 ? (
               <div className="p-8 text-center text-xs text-zinc-400 space-y-2">
-                <p>Belum ada tautan pelacak kampanye.</p>
-                <button
-                  type="button"
-                  onClick={() => setIsLinkModalOpen(true)}
-                  className="px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-semibold cursor-pointer"
-                >
-                  + Buat Tautan Sekarang
-                </button>
+                <p>Belum ada tautan pelacak kampanye pada workspace ini.</p>
+                {!isViewer && (
+                  <button
+                    type="button"
+                    onClick={() => setIsLinkModalOpen(true)}
+                    className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold cursor-pointer"
+                  >
+                    + Buat Tautan Sekarang
+                  </button>
+                )}
               </div>
             ) : (
               <div className="space-y-2.5 max-h-[310px] overflow-y-auto pr-1">
@@ -1998,15 +2107,17 @@ export default function SocialMediaPage() {
                             <MousePointerClick className="w-2.5 h-2.5 text-sky-600" />
                             {link.clicks_count} klik
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteLink(link.id)}
-                            disabled={deletingLinkId === link.id}
-                            className="p-1 rounded text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
-                            title="Hapus tautan ini"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {!isViewer && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteLink(link.id)}
+                              disabled={deletingLinkId === link.id}
+                              className="p-1 rounded text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                              title="Hapus tautan ini"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -2121,16 +2232,14 @@ export default function SocialMediaPage() {
         <div className="p-5">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {SUPPORTED_PLATFORMS.map((platform) => {
-              const existingConn =
-                connections.find(
-                  (c) => c.platform.toLowerCase() === platform.id.toLowerCase() && c.status === 'ACTIVE'
-                ) ||
-                connections.find(
-                  (c) => c.platform.toLowerCase() === platform.id.toLowerCase()
-                );
+              const platformConns = connections.filter(
+                (c) => c.platform.toLowerCase() === platform.id.toLowerCase() && c.status === 'ACTIVE'
+              );
+              const hasActiveConn = platformConns.length > 0;
+              const hasInitiatedConn = connections.some(
+                (c) => c.platform.toLowerCase() === platform.id.toLowerCase() && c.status === 'INITIATED'
+              );
               const isConnecting = connectingPlatform === platform.id;
-              const isConnected = existingConn?.status === 'ACTIVE';
-              const isInitiated = existingConn?.status === 'INITIATED';
 
               return (
                 <div
@@ -2147,12 +2256,12 @@ export default function SocialMediaPage() {
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
                           Segera Hadir
                         </span>
-                      ) : isConnected ? (
+                      ) : hasActiveConn ? (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
                           <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-                          Terhubung
+                          {platformConns.length} Terhubung
                         </span>
-                      ) : isInitiated ? (
+                      ) : hasInitiatedConn ? (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 flex items-center gap-1">
                           <Clock className="w-3 h-3 text-amber-500" />
                           Menunggu Otorisasi
@@ -2191,28 +2300,62 @@ export default function SocialMediaPage() {
                         <Clock className="w-3.5 h-3.5 text-zinc-400" />
                         <span>Segera Hadir</span>
                       </button>
-                    ) : isConnected ? (
+                    ) : isViewer ? (
+                      <div className="p-2.5 rounded-lg bg-zinc-50 border border-zinc-200 text-center text-xs text-zinc-500 flex items-center justify-center gap-1.5">
+                        <Lock className="w-3.5 h-3.5 text-zinc-400" />
+                        <span>Akses Viewer (Hanya Baca)</span>
+                      </div>
+                    ) : hasActiveConn ? (
                       <div className="space-y-2">
-                        <div className="text-[10px] text-zinc-400 flex items-center justify-between">
-                          <span>Sinkron Terakhir:</span>
-                          <span className="font-mono text-zinc-600">
-                            {existingConn?.last_synced_at ? new Date(existingConn.last_synced_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : 'Belum pernah'}
-                          </span>
+                        {/* List Akun Terhubung Singkat */}
+                        <div className="space-y-1.5 max-h-24 overflow-y-auto pr-1">
+                          {platformConns.map((c) => (
+                            <div
+                              key={c.id}
+                              className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg bg-zinc-50 border border-zinc-200/80"
+                            >
+                              <div className="min-w-0 pr-1">
+                                <div className="font-semibold text-zinc-900 truncate text-[11px] flex items-center gap-1.5">
+                                  <span>{c.account_handle || 'Akun'}</span>
+                                  <span className="text-[10px] font-medium text-zinc-600 bg-white px-1.5 py-0.5 rounded border border-zinc-200 shrink-0">
+                                    {c.account_label || 'Utama'}
+                                  </span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleDisconnect(c.id)}
+                                disabled={disconnectingId === c.id}
+                                className="text-red-500 hover:text-red-700 p-1 cursor-pointer disabled:opacity-50 shrink-0"
+                                title="Putuskan akun ini"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))}
                         </div>
+
+                        {/* Tombol Hubungkan Akun Tambahan (Multi-Account) */}
                         <button
                           type="button"
-                          onClick={() => handleDisconnect(existingConn.id)}
-                          disabled={disconnectingId === existingConn.id}
-                          className="w-full py-2 px-3 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          onClick={() => {
+                            setConnectAccountLabel(`Akun ${platform.name} #${platformConns.length + 1}`);
+                            setConnectModalPlatform(platform);
+                          }}
+                          disabled={isConnecting}
+                          className="w-full py-2 px-3 rounded-lg border border-dashed border-zinc-300 hover:border-zinc-400 bg-zinc-50/50 hover:bg-zinc-100 text-zinc-800 text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                         >
-                          <Trash2 className="w-3 h-3" />
-                          <span>{disconnectingId === existingConn.id ? 'Memutuskan...' : 'Putuskan Koneksi'}</span>
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>+ Tambah Akun {platform.name} Lain</span>
                         </button>
                       </div>
                     ) : (
                       <button
                         type="button"
-                        onClick={() => handleConnect(platform.id)}
+                        onClick={() => {
+                          setConnectAccountLabel('Akun Utama');
+                          setConnectModalPlatform(platform);
+                        }}
                         disabled={isConnecting}
                         className={`w-full py-2 px-3 rounded-lg text-white text-xs font-semibold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 active:scale-[0.98] ${
                           platform.id === 'youtube'
@@ -2253,7 +2396,7 @@ export default function SocialMediaPage() {
               </h2>
             </div>
             <p className="text-xs text-zinc-500">
-              Semua channel dan akun media sosial yang aktif dan terintegrasi dengan profil Anda.
+              Semua channel dan akun media sosial yang aktif dan terisolasi pada workspace <strong>{currentProject?.name}</strong>.
             </p>
           </div>
           <span className="text-xs font-medium text-zinc-500">
@@ -2268,7 +2411,7 @@ export default function SocialMediaPage() {
           </div>
         ) : connections.length === 0 ? (
           <div className="p-12 text-center text-xs text-zinc-400">
-            Belum ada akun media sosial yang terhubung. Klik salah satu tombol platform di atas untuk menghubungkan akun.
+            Belum ada akun media sosial yang terhubung pada workspace ini. Klik salah satu tombol platform di atas untuk menghubungkan akun.
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -2276,6 +2419,7 @@ export default function SocialMediaPage() {
               <thead>
                 <tr className="border-b border-zinc-200 bg-zinc-50/50 text-zinc-500 font-semibold">
                   <th className="py-3 px-6">Platform</th>
+                  <th className="py-3 px-6">Label / Brand</th>
                   <th className="py-3 px-6">Akun / Pengguna</th>
                   <th className="py-3 px-6">Status</th>
                   <th className="py-3 px-6">Sinkronisasi Terakhir</th>
@@ -2288,6 +2432,58 @@ export default function SocialMediaPage() {
                   <tr key={conn.id} className="hover:bg-zinc-50/60 transition-colors">
                     <td className="py-3.5 px-6 font-semibold uppercase tracking-wider text-[11px] text-zinc-900">
                       {conn.platform}
+                    </td>
+                    <td className="py-3.5 px-6">
+                      {editingConnId === conn.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={editingLabelValue}
+                            onChange={(e) => setEditingLabelValue(e.target.value)}
+                            className="w-32 px-2 py-1 text-xs border border-zinc-300 rounded focus:border-zinc-900 focus:outline-none bg-white"
+                            placeholder="Label akun"
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateLabel(conn.id)}
+                            disabled={savingLabel}
+                            className="p-1 rounded bg-zinc-900 text-white hover:bg-zinc-800 disabled:opacity-50 cursor-pointer"
+                            title="Simpan label"
+                          >
+                            <Check className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingConnId(null)}
+                            disabled={savingLabel}
+                            className="p-1 rounded bg-zinc-100 text-zinc-600 hover:bg-zinc-200 cursor-pointer"
+                            title="Batal"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 group">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-semibold bg-zinc-100 border border-zinc-200 text-zinc-800">
+                            <Tag className="w-2.5 h-2.5 text-zinc-400" />
+                            {conn.account_label || 'Akun Utama'}
+                          </span>
+                          {!isViewer && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingConnId(conn.id);
+                                setEditingLabelValue(conn.account_label || 'Akun Utama');
+                              }}
+                              className="opacity-0 group-hover:opacity-100 p-1 text-zinc-400 hover:text-zinc-700 transition-opacity cursor-pointer"
+                              title="Ubah label akun"
+                            >
+                              <Pencil className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3.5 px-6 font-medium text-xs text-zinc-900">
                       {conn.account_handle ? (
@@ -2322,14 +2518,18 @@ export default function SocialMediaPage() {
                       {new Date(conn.created_at).toLocaleDateString('id-ID')}
                     </td>
                     <td className="py-3.5 px-6 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleDisconnect(conn.id)}
-                        disabled={disconnectingId === conn.id}
-                        className="text-red-600 hover:text-red-700 font-semibold text-xs hover:underline cursor-pointer disabled:opacity-50"
-                      >
-                        {disconnectingId === conn.id ? 'Memproses...' : 'Hapus'}
-                      </button>
+                      {isViewer ? (
+                        <span className="text-zinc-400 text-[11px] italic">Hanya Baca</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleDisconnect(conn.id)}
+                          disabled={disconnectingId === conn.id}
+                          className="text-red-600 hover:text-red-700 font-semibold text-xs hover:underline cursor-pointer disabled:opacity-50"
+                        >
+                          {disconnectingId === conn.id ? 'Memproses...' : 'Hapus'}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -2628,7 +2828,7 @@ export default function SocialMediaPage() {
                     Buat Tautan Pelacak (Link-in-Bio)
                   </h3>
                   <p className="text-[11px] text-zinc-500">
-                    Otomatis menambahkan tag UTM untuk melacak klik website dari media sosial.
+                    Workspace: <strong className="text-zinc-700">{currentProject?.name}</strong> • Otomatis menambahkan tag UTM untuk melacak klik website dari media sosial.
                   </p>
                 </div>
               </div>
@@ -2746,6 +2946,107 @@ export default function SocialMediaPage() {
                 >
                   {isCreatingLink ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
                   <span>{isCreatingLink ? 'Menyimpan...' : 'Simpan & Buat Tautan'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
+      {/* ============================================================= */}
+      {/* MODAL: Hubungkan Akun Baru / Multi-Account dengan Label */}
+      {/* ============================================================= */}
+      {mounted && connectModalPlatform && createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+          style={{ width: '100vw', height: '100vh', margin: 0, top: 0, left: 0, right: 0, bottom: 0 }}
+          onClick={() => setConnectModalPlatform(null)}
+        >
+          <div
+            className="bg-white border border-zinc-200 rounded-2xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/70">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-white border border-zinc-200 flex items-center justify-center shadow-xs">
+                  {connectModalPlatform.iconSvg}
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-zinc-900">
+                    Hubungkan Akun {connectModalPlatform.name}
+                  </h3>
+                  <p className="text-[11px] text-zinc-500">
+                    Workspace: <strong className="text-zinc-800">{currentProject?.name || 'Default Project'}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConnectModalPlatform(null)}
+                className="w-7 h-7 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 flex items-center justify-center text-sm font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleConnect(connectModalPlatform.id, connectAccountLabel);
+              }}
+              className="p-5 space-y-4 text-xs"
+            >
+              <div className="space-y-1.5">
+                <label className="block font-semibold text-zinc-800">
+                  Label Akun / Identitas Brand
+                </label>
+                <input
+                  type="text"
+                  value={connectAccountLabel}
+                  onChange={(e) => setConnectAccountLabel(e.target.value)}
+                  placeholder="Contoh: Akun Utama, Channel Shorts, Toko Online..."
+                  className="w-full px-3 py-2 text-xs border border-zinc-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-400 bg-white text-zinc-900"
+                  required
+                />
+                <p className="text-[11px] text-zinc-400 leading-relaxed">
+                  Gunakan label ini untuk membedakan channel atau akun jika Anda mengelola beberapa akun {connectModalPlatform.name} dalam satu brand/agensi.
+                </p>
+              </div>
+
+              <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 text-xs text-zinc-600 space-y-1">
+                <div className="font-semibold text-zinc-900 flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  Otorisasi Terisolasi
+                </div>
+                <p className="text-[11px] text-zinc-500 leading-relaxed">
+                  Koneksi ini akan dihubungkan secara eksklusif ke workspace <strong>{currentProject?.name}</strong>. Anda dapat memutuskan akun ini kapan saja.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
+                <button
+                  type="button"
+                  onClick={() => setConnectModalPlatform(null)}
+                  className="px-4 py-2 rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50 font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={connectingPlatform === connectModalPlatform.id}
+                  className="px-4 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 disabled:opacity-60 text-white font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  {connectingPlatform === connectModalPlatform.id ? (
+                    <>
+                      <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Membuka Otorisasi...</span>
+                    </>
+                  ) : (
+                    <>
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Lanjutkan ke {connectModalPlatform.name}</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

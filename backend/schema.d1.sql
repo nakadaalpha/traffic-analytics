@@ -35,6 +35,22 @@ VALUES (
     1
 );
 
+-- 2b. Tabel project_members: Mengelola hak akses kolaborasi tim (RBAC) pada tiap project/workspace
+CREATE TABLE IF NOT EXISTS project_members (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role TEXT DEFAULT 'viewer' NOT NULL, -- 'owner', 'editor', 'viewer'
+    invited_by TEXT,
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(project_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members (user_id);
+CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members (project_id);
+
 -- 3. Tabel click_events: Raw tracking log
 CREATE TABLE IF NOT EXISTS click_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,17 +129,21 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_project ON project_api_keys (project_id)
 CREATE TABLE IF NOT EXISTS social_connections (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    platform TEXT NOT NULL, -- 'youtube', 'twitter', 'instagram'
+    project_id TEXT,
+    platform TEXT NOT NULL, -- 'youtube', 'tiktok', 'instagram', 'twitter', dll
+    account_label TEXT DEFAULT 'Akun Utama',
     composio_connection_id TEXT NOT NULL,
     account_handle TEXT,
     status TEXT DEFAULT 'ACTIVE' NOT NULL, -- 'ACTIVE', 'EXPIRED', 'REVOKED'
     last_synced_at TEXT,
     created_at TEXT DEFAULT (datetime('now')) NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_social_conn_user ON social_connections (user_id);
 CREATE INDEX IF NOT EXISTS idx_social_conn_platform ON social_connections (platform);
+CREATE INDEX IF NOT EXISTS idx_social_conn_project ON social_connections (project_id, platform);
 
 -- 8. Tabel social_metrics_history: Log metrik berkala (daily time-series snapshot data) untuk visualisasi tren analitik
 CREATE TABLE IF NOT EXISTS social_metrics_history (

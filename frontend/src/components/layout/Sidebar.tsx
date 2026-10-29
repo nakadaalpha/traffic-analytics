@@ -7,7 +7,6 @@ import {
   BarChart3, 
   FileText, 
   Layers, 
-  BookOpen, 
   Zap, 
   ChevronRight, 
   ArrowUpRight,
@@ -37,14 +36,9 @@ export function Sidebar() {
       icon: Share2,
     },
     {
-      name: 'Manajemen Project',
+      name: 'Manajemen & Integrasi',
       href: '/dashboard/projects',
       icon: Layers,
-    },
-    {
-      name: 'Panduan Integrasi',
-      href: '/dashboard/docs',
-      icon: BookOpen,
     },
   ];
 

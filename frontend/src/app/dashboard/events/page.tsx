@@ -3,11 +3,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { 
-  ArrowLeft, 
   RotateCw, 
-  FolderOpen, 
   FileText, 
-  ShieldCheck, 
   Terminal, 
   Globe,
   Monitor,
@@ -20,8 +17,10 @@ import {
   ChevronDown,
   Share2,
   X,
+  Building2,
 } from 'lucide-react';
 import { resolveElementName, getBrandBadgeStyle } from '@/lib/elementNaming';
+import { useProject } from '@/context/ProjectContext';
 
 interface ClickEventRow {
   id: string;
@@ -36,11 +35,6 @@ interface ClickEventRow {
   city?: string;
   created_at: string;
   display_name?: string | null;
-}
-
-interface ProjectOption {
-  id: string;
-  name: string;
 }
 
 function parseUserAgentDetails(ua: string | null | undefined) {
@@ -231,10 +225,10 @@ function parseUtcTimestampMs(utcDateStr: string | null | undefined): number {
 }
 
 export default function EventsPage() {
+  const { currentProject } = useProject();
+  const selectedProject = currentProject?.id || '';
   const [events, setEvents] = useState<ClickEventRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [projects, setProjects] = useState<ProjectOption[]>([]);
-  const [selectedProject, setSelectedProject] = useState('');
 
   // State Filter & Sorting untuk Log Event
   const [ctaCategoryFilter, setCtaCategoryFilter] = useState<'all' | 'social'>('all');
@@ -242,33 +236,12 @@ export default function EventsPage() {
   const [sortColumn, setSortColumn] = useState<'time' | 'element_id'>('time');
   const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc');
 
-  // 1. Fetch daftar project milik user
-  const fetchUserProjects = useCallback(async () => {
-    try {
-      const res = await fetch('/api/track/projects', {
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      if (res.ok) {
-        const json = await res.json();
-        const list: ProjectOption[] = json.data || [];
-        setProjects(list);
-        if (list.length > 0 && !selectedProject) {
-          setSelectedProject(list[0].id);
-        }
-      }
-    } catch (err) {
-      console.warn('[EventsPage] Failed to fetch projects:', err);
-    }
-  }, [selectedProject]);
-
-  useEffect(() => {
-    fetchUserProjects();
-  }, [fetchUserProjects]);
-
-  // 2. Fetch raw events
+  // Fetch raw events untuk workspace aktif
   const fetchEvents = useCallback(async () => {
-    if (!selectedProject) return;
+    if (!selectedProject) {
+      setEvents([]);
+      return;
+    }
     try {
       setLoading(true);
       const res = await fetch(`/api/track/events?projectId=${encodeURIComponent(selectedProject)}`, {
@@ -371,38 +344,26 @@ export default function EventsPage() {
       {/* Unified Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="space-y-1">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <div className="w-8 h-8 rounded-lg bg-zinc-100 border border-zinc-200 text-zinc-900 flex items-center justify-center shrink-0">
               <FileText className="w-4 h-4" />
             </div>
             <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900">
               Event Logs Mentah (Raw Ingestion)
             </h1>
+            {currentProject && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-700 border border-zinc-200">
+                <Building2 className="w-3 h-3 text-zinc-500" />
+                <span>{currentProject.name}</span>
+              </span>
+            )}
           </div>
           <p className="text-xs text-zinc-500 leading-relaxed pl-10.5">
             Riwayat 50 event klik terakhir untuk keperluan verifikasi dan debugging teknis.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
-          {/* Project Selector */}
-          {projects.length > 0 && (
-            <div className="h-9 flex items-center gap-2 bg-white border border-zinc-200 rounded-lg px-3 shadow-xs">
-              <FolderOpen className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-              <select
-                value={selectedProject}
-                onChange={(e) => setSelectedProject(e.target.value)}
-                className="bg-transparent text-xs font-semibold text-zinc-800 focus:outline-none cursor-pointer pr-1"
-              >
-                {projects.map((proj) => (
-                  <option key={proj.id} value={proj.id}>
-                    {proj.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
+        <div className="flex items-center gap-2.5 self-start sm:self-auto">
           <button
             type="button"
             onClick={fetchEvents}
@@ -685,11 +646,8 @@ export default function EventsPage() {
           </div>
         )}
 
-        <div className="p-4 border-t border-zinc-200 bg-zinc-50/50 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
-          <div className="flex items-center gap-1.5">
-            <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            <span>Kepatuhan Regulasi Privasi GDPR / UU PDP</span>
-          </div>
+        <div className="p-3.5 border-t border-zinc-200 bg-zinc-50/50 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
+          <span>Log riwayat penyerapan event real-time</span>
           <div>
             Menampilkan <strong className="text-zinc-800 font-semibold">{filteredEvents.length}</strong> dari {events.length} event
           </div>

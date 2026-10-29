@@ -770,12 +770,21 @@ app.get('/api/track/projects', async (c) => {
       return c.json({ success: true, count: 0, data: [] });
     }
 
-    const query = `SELECT id, name, public_write_key, allowed_origins, is_active, owner_id, created_at 
-                   FROM projects 
-                   WHERE owner_id = ? 
-                   ORDER BY created_at DESC;`;
+    const query = `
+      SELECT p.id, p.name, p.public_write_key, p.allowed_origins, p.is_active, p.owner_id, p.created_at,
+             CASE 
+               WHEN p.owner_id = ? THEN 'owner'
+               ELSE COALESCE(pm.role, 'viewer')
+             END as user_role
+      FROM projects p
+      LEFT JOIN project_members pm ON p.id = pm.project_id AND pm.user_id = ?
+      WHERE p.owner_id = ? OR pm.user_id = ?
+      ORDER BY p.created_at DESC;
+    `;
 
-    const { results } = await c.env.DB.prepare(query).bind(currentUser.id).all();
+    const { results } = await c.env.DB.prepare(query)
+      .bind(currentUser.id, currentUser.id, currentUser.id, currentUser.id)
+      .all();
 
     const formatted = results.map((row: any) => {
       let origins = [];
@@ -791,6 +800,7 @@ app.get('/api/track/projects', async (c) => {
         allowedOrigins: origins,
         isActive: Boolean(row.is_active),
         ownerId: row.owner_id,
+        role: row.user_role || 'viewer',
         createdAt: row.created_at,
       };
     });
@@ -1445,6 +1455,219 @@ app.delete('/api/track/projects/:id/keys/:keyId', async (c) => {
   } catch (err: any) {
     console.error('[Delete API Key Error]', err.message);
     return c.json({ success: false, error: 'Gagal mencabut API Key' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// Team / Members RBAC Endpoints (Multi-Account & Workspace Support)
+// -------------------------------------------------------------
+
+// 1. GET /api/track/projects/:id/members (Daftar anggota tim workspace)
+app.get('/api/track/projects/:id/members', async (c) => {
+  try {
+    const projectId = c.req.param('id');
+    const currentUser = await extractCurrentUser(c);
+    if (!currentUser) {
+      return c.json({ success: false, error: 'Unauthorized' }, 401);
+    }
+
+    const project: any = await c.env.DB.prepare(
+      `SELECT id, name, owner_id, created_at FROM projects WHERE id = ? LIMIT 1;`
+    ).bind(projectId).first();
+
+    if (!project) {
+      return c.json({ success: false, error: 'Project tidak ditemukan' }, 404);
+    }
+
+    const isOwner = project.owner_id === currentUser.id;
+    const memberCheck: any = await c.env.DB.prepare(
+      `SELECT id, role FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1;`
+    ).bind(projectId, currentUser.id).first();
+
+    if (!isOwner && !memberCheck) {
+      return c.json({ success: false, error: 'Forbidden: Anda tidak memiliki akses ke project ini' }, 403);
+    }
+
+    // Ambil data owner
+    const ownerUser: any = await c.env.DB.prepare(
+      `SELECT id, name, email, username, created_at FROM users WHERE id = ? LIMIT 1;`
+    ).bind(project.owner_id || '').first();
+
+    // Ambil anggota yang diundang
+    const { results: memberRows } = await c.env.DB.prepare(
+      `SELECT pm.id, pm.project_id, pm.user_id, pm.role, pm.created_at,
+              u.name, u.email, u.username
+       FROM project_members pm
+       JOIN users u ON pm.user_id = u.id
+       WHERE pm.project_id = ?
+       ORDER BY pm.created_at ASC;`
+    ).bind(projectId).all<any>();
+
+    const members: any[] = [];
+    if (ownerUser) {
+      members.push({
+        id: `owner_${ownerUser.id}`,
+        userId: ownerUser.id,
+        name: ownerUser.name,
+        email: ownerUser.email,
+        username: ownerUser.username,
+        role: 'owner',
+        isOwner: true,
+        createdAt: project.created_at || ownerUser.created_at,
+      });
+    }
+
+    memberRows.forEach((row: any) => {
+      if (row.user_id !== project.owner_id) {
+        members.push({
+          id: row.id,
+          userId: row.user_id,
+          name: row.name,
+          email: row.email,
+          username: row.username,
+          role: row.role,
+          isOwner: false,
+          createdAt: row.created_at,
+        });
+      }
+    });
+
+    const userRole = isOwner ? 'owner' : (memberCheck?.role || 'viewer');
+
+    return c.json({
+      success: true,
+      projectId,
+      projectName: project.name,
+      userRole,
+      count: members.length,
+      data: members,
+    });
+  } catch (err: any) {
+    console.error('[Get Members Error]', err.message);
+    return c.json({ success: false, error: 'Gagal memuat anggota tim' }, 500);
+  }
+});
+
+// 2. POST /api/track/projects/:id/members (Undang anggota baru ke workspace)
+app.post('/api/track/projects/:id/members', async (c) => {
+  try {
+    const projectId = c.req.param('id');
+    const currentUser = await extractCurrentUser(c);
+    if (!currentUser) {
+      return c.json({ success: false, error: 'Unauthorized' }, 401);
+    }
+
+    const project: any = await c.env.DB.prepare(
+      `SELECT id, name, owner_id FROM projects WHERE id = ? LIMIT 1;`
+    ).bind(projectId).first();
+
+    if (!project) {
+      return c.json({ success: false, error: 'Project tidak ditemukan' }, 404);
+    }
+
+    if (project.owner_id !== currentUser.id) {
+      return c.json({ success: false, error: 'Forbidden: Hanya pemilik project yang dapat mengundang anggota' }, 403);
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const emailOrUsername = String(body.emailOrUsername || body.email || '').trim().toLowerCase();
+    const role = ['editor', 'viewer'].includes(String(body.role || '').toLowerCase())
+      ? String(body.role).toLowerCase()
+      : 'viewer';
+
+    if (!emailOrUsername) {
+      return c.json({ success: false, error: 'Email atau username wajib diisi' }, 400);
+    }
+
+    const targetUser: any = await c.env.DB.prepare(
+      `SELECT id, name, email, username FROM users WHERE LOWER(email) = ? OR LOWER(username) = ? LIMIT 1;`
+    ).bind(emailOrUsername, emailOrUsername).first();
+
+    if (!targetUser) {
+      return c.json({
+        success: false,
+        error: `Pengguna dengan email/username "${emailOrUsername}" belum terdaftar di Firenalytics`,
+      }, 404);
+    }
+
+    if (targetUser.id === project.owner_id) {
+      return c.json({ success: false, error: 'Pengguna ini sudah menjadi pemilik project' }, 400);
+    }
+
+    const memberId = `pm_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+
+    await c.env.DB.prepare(
+      `INSERT INTO project_members (id, project_id, user_id, role, invited_by, created_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role;`
+    ).bind(memberId, projectId, targetUser.id, role, currentUser.id).run();
+
+    return c.json({
+      success: true,
+      message: `Berhasil menambahkan ${targetUser.name} sebagai ${role}`,
+      data: {
+        id: memberId,
+        userId: targetUser.id,
+        name: targetUser.name,
+        email: targetUser.email,
+        username: targetUser.username,
+        role,
+      },
+    });
+  } catch (err: any) {
+    console.error('[Add Member Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal menambahkan anggota' }, 500);
+  }
+});
+
+// 3. PATCH /api/track/projects/:id/members/:memberId (Ubah peran anggota)
+app.patch('/api/track/projects/:id/members/:memberId', async (c) => {
+  try {
+    const projectId = c.req.param('id');
+    const memberId = c.req.param('memberId');
+    const currentUser = await extractCurrentUser(c);
+    if (!currentUser) return c.json({ success: false, error: 'Unauthorized' }, 401);
+
+    const project: any = await c.env.DB.prepare(`SELECT owner_id FROM projects WHERE id = ?;`).bind(projectId).first();
+    if (!project || project.owner_id !== currentUser.id) {
+      return c.json({ success: false, error: 'Forbidden: Hanya owner yang dapat mengubah peran' }, 403);
+    }
+
+    const body = await c.req.json().catch(() => ({}));
+    const role = ['editor', 'viewer'].includes(String(body.role || '').toLowerCase())
+      ? String(body.role).toLowerCase()
+      : 'viewer';
+
+    await c.env.DB.prepare(
+      `UPDATE project_members SET role = ? WHERE id = ? AND project_id = ?;`
+    ).bind(role, memberId, projectId).run();
+
+    return c.json({ success: true, message: `Peran anggota berhasil diubah menjadi ${role}` });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// 4. DELETE /api/track/projects/:id/members/:memberId (Hapus akses anggota)
+app.delete('/api/track/projects/:id/members/:memberId', async (c) => {
+  try {
+    const projectId = c.req.param('id');
+    const memberId = c.req.param('memberId');
+    const currentUser = await extractCurrentUser(c);
+    if (!currentUser) return c.json({ success: false, error: 'Unauthorized' }, 401);
+
+    const project: any = await c.env.DB.prepare(`SELECT owner_id FROM projects WHERE id = ?;`).bind(projectId).first();
+    if (!project || project.owner_id !== currentUser.id) {
+      return c.json({ success: false, error: 'Forbidden: Hanya owner yang dapat menghapus anggota' }, 403);
+    }
+
+    await c.env.DB.prepare(
+      `DELETE FROM project_members WHERE id = ? AND project_id = ?;`
+    ).bind(memberId, projectId).run();
+
+    return c.json({ success: true, message: 'Akses anggota tim berhasil dicabut' });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 500);
   }
 });
 

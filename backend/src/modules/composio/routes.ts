@@ -139,6 +139,42 @@ export async function ensureSocialTables(db: D1Database) {
       await db.prepare("CREATE INDEX IF NOT EXISTS idx_click_events_social ON click_events (project_id, social_platform, created_at DESC);").run();
     } catch {}
 
+    // Multi-Account & Workspace Support (Idempotent)
+    try { await db.prepare("ALTER TABLE social_connections ADD COLUMN project_id TEXT;").run(); } catch {}
+    try { await db.prepare("ALTER TABLE social_connections ADD COLUMN account_label TEXT DEFAULT 'Akun Utama';").run(); } catch {}
+    try {
+      await db.prepare("CREATE INDEX IF NOT EXISTS idx_social_conn_project ON social_connections (project_id, platform);").run();
+    } catch {}
+    try {
+      await db.prepare(`
+        UPDATE social_connections 
+        SET project_id = COALESCE(
+          (SELECT id FROM projects WHERE owner_id = social_connections.user_id ORDER BY created_at ASC LIMIT 1),
+          'prj_default'
+        ) 
+        WHERE project_id IS NULL OR project_id = 'prj_default';
+      `).run();
+    } catch {}
+
+    // Tabel Anggota Proyek / RBAC
+    try {
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS project_members (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          role TEXT DEFAULT 'viewer' NOT NULL,
+          invited_by TEXT,
+          created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE(project_id, user_id)
+        );
+      `).run();
+      await db.prepare("CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members (user_id);").run();
+      await db.prepare("CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members (project_id);").run();
+    } catch {}
+
     socialTablesInitialized = true;
   } catch (err: any) {
     console.warn('[DB] Failed to ensure social tables:', err.message);
@@ -250,15 +286,17 @@ composioRouter.post('/connect', async (c) => {
       `conn_${Date.now().toString(36)}`;
 
     const connId = `sc_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
+    const projectId = String(body.projectId || body.project_id || 'prj_default').trim();
+    const accountLabel = String(body.accountLabel || body.account_label || 'Akun Utama').trim();
 
     await ensureSocialTables(c.env.DB);
 
     // Store initiated connection in Cloudflare D1
     await c.env.DB.prepare(
-      `INSERT INTO social_connections (id, user_id, platform, composio_connection_id, status, created_at)
-       VALUES (?, ?, ?, ?, 'INITIATED', datetime('now'));`
+      `INSERT INTO social_connections (id, user_id, project_id, platform, account_label, composio_connection_id, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'INITIATED', datetime('now'));`
     )
-      .bind(connId, user.id, platform, connectedAccountId)
+      .bind(connId, user.id, projectId, platform, accountLabel, connectedAccountId)
       .run();
 
     return c.json({
@@ -302,6 +340,8 @@ composioRouter.post('/callback', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const connectedAccountId = String(body.connectedAccountId || body.connected_account_id || '').trim();
   const platform = String(body.platform || 'youtube').trim().toLowerCase();
+  const projectId = String(body.projectId || body.project_id || '').trim();
+  const accountLabel = String(body.accountLabel || body.account_label || '').trim();
 
   try {
     await ensureSocialTables(c.env.DB);
@@ -323,6 +363,8 @@ composioRouter.post('/callback', async (c) => {
        SET status = 'ACTIVE',
            composio_connection_id = CASE WHEN ? != '' THEN ? ELSE composio_connection_id END,
            account_handle = COALESCE(?, account_handle),
+           project_id = CASE WHEN ? != '' THEN ? ELSE project_id END,
+           account_label = CASE WHEN ? != '' THEN ? ELSE account_label END,
            last_synced_at = datetime('now')
        WHERE id IN (
          SELECT id FROM social_connections 
@@ -335,6 +377,10 @@ composioRouter.post('/callback', async (c) => {
         connectedAccountId,
         connectedAccountId,
         accountHandle,
+        projectId,
+        projectId,
+        accountLabel,
+        accountLabel,
         user.id,
         connectedAccountId
       )
@@ -385,13 +431,23 @@ composioRouter.get('/status', async (c) => {
   try {
     await ensureSocialTables(c.env.DB);
 
-    const { results } = await c.env.DB.prepare(
-      `SELECT id, user_id, platform, composio_connection_id, account_handle, status, last_synced_at, created_at
-       FROM social_connections
-       WHERE user_id = ?
-       ORDER BY created_at DESC;`
-    )
-      .bind(user.id)
+    const reqProjectId = c.req.query('projectId');
+    let query = `
+      SELECT id, user_id, project_id, platform, account_label, composio_connection_id, account_handle, status, last_synced_at, created_at
+      FROM social_connections
+      WHERE user_id = ?
+    `;
+    const params: any[] = [user.id];
+
+    if (reqProjectId) {
+      query += ` AND (project_id = ? OR project_id IS NULL)`;
+      params.push(reqProjectId);
+    }
+
+    query += ` ORDER BY created_at DESC;`;
+
+    const { results } = await c.env.DB.prepare(query)
+      .bind(...params)
       .all();
 
     return c.json({
@@ -428,13 +484,21 @@ composioRouter.get('/metrics', async (c) => {
     await ensureSocialTables(c.env.DB);
 
     // 1. Ambil seluruh akun media sosial aktif milik user ini
-    const { results: connections } = await c.env.DB.prepare(
-      `SELECT id, platform, composio_connection_id, account_handle, status, last_synced_at, created_at
-       FROM social_connections
-       WHERE user_id = ? AND status = 'ACTIVE'
-       ORDER BY created_at DESC;`
-    )
-      .bind(user.id)
+    const reqProjectId = c.req.query('projectId');
+    let connQuery = `
+      SELECT id, user_id, project_id, platform, account_label, composio_connection_id, account_handle, status, last_synced_at, created_at
+      FROM social_connections
+      WHERE user_id = ? AND status = 'ACTIVE'
+    `;
+    const connParams: any[] = [user.id];
+    if (reqProjectId) {
+      connQuery += ` AND (project_id = ? OR project_id IS NULL)`;
+      connParams.push(reqProjectId);
+    }
+    connQuery += ` ORDER BY created_at DESC;`;
+
+    const { results: connections } = await c.env.DB.prepare(connQuery)
+      .bind(...connParams)
       .all<any>();
 
     if (!connections || connections.length === 0) {
@@ -518,9 +582,14 @@ composioRouter.get('/metrics', async (c) => {
         id: conn.id,
         platform: conn.platform,
         accountHandle: conn.account_handle || null,
+        accountLabel: conn.account_label || 'Akun Utama',
+        projectId: conn.project_id || null,
         lastSyncedAt: conn.last_synced_at,
       })),
-      primaryAccount,
+      primaryAccount: {
+        ...primaryAccount,
+        accountLabel: primaryAccount.account_label || 'Akun Utama',
+      },
       summary: {
         connectionId: primaryAccount.id,
         subscribers: latestSubscribers,
@@ -530,6 +599,7 @@ composioRouter.get('/metrics', async (c) => {
         lastSyncedAt: primaryAccount?.last_synced_at,
         platform: primaryAccount?.platform,
         accountHandle: primaryAccount?.account_handle || null,
+        accountLabel: primaryAccount?.account_label || 'Akun Utama',
       },
       timeSeries,
     });
@@ -633,16 +703,22 @@ composioRouter.get('/posts', async (c) => {
     }
 
     // Susun query pengambilan data
+    const reqProjectId = c.req.query('projectId');
     let query = `
       SELECT p.id, p.connection_id, p.platform, p.platform_post_id, p.title_or_caption,
              p.thumbnail_url, p.permalink, p.published_at, p.views_count, p.likes_count,
              p.comments_count, p.shares_count, p.additional_metrics, p.last_synced_at,
-             c.account_handle
+             c.account_handle, c.account_label, c.project_id
       FROM social_posts p
       JOIN social_connections c ON p.connection_id = c.id
       WHERE c.user_id = ?
     `;
     const params: any[] = [user.id];
+
+    if (reqProjectId) {
+      query += ` AND (c.project_id = ? OR c.project_id IS NULL)`;
+      params.push(reqProjectId);
+    }
 
     if (filterPlatform && filterPlatform !== 'all') {
       query += ` AND p.platform = ?`;
@@ -704,6 +780,8 @@ composioRouter.get('/posts', async (c) => {
         engagementRate: extras.engagement_rate || calculatedRate,
         additionalMetrics: extras,
         accountHandle: r.account_handle,
+        accountLabel: r.account_label || 'Akun Utama',
+        projectId: r.project_id || null,
         lastSyncedAt: r.last_synced_at,
       };
     });
@@ -1021,6 +1099,11 @@ composioRouter.get('/insights', async (c) => {
     `;
     const params: any[] = [user.id];
 
+    const reqProjectId = c.req.query('projectId');
+    if (reqProjectId) {
+      query += ` AND (c.project_id = ? OR c.project_id IS NULL)`;
+      params.push(reqProjectId);
+    }
     if (reqPlatform && reqPlatform.toLowerCase() !== 'all') {
       query += ` AND LOWER(p.platform) = ?`;
       params.push(reqPlatform.toLowerCase());
@@ -1232,6 +1315,42 @@ composioRouter.post('/insights/refresh', async (c) => {
 });
 
 // -------------------------------------------------------------
+// PATCH /api/composio/connections/:id
+// Update label akun media sosial (misal: "Channel Utama", "Channel Shorts")
+// -------------------------------------------------------------
+composioRouter.patch('/connections/:id', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan atau kedaluwarsa' }, 401);
+  }
+
+  const connectionId = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const accountLabel = String(body.accountLabel || body.account_label || '').trim();
+
+  if (!accountLabel) {
+    return c.json({ success: false, error: 'Label akun tidak boleh kosong' }, 400);
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+    await c.env.DB.prepare(
+      `UPDATE social_connections SET account_label = ? WHERE id = ? AND user_id = ?;`
+    )
+      .bind(accountLabel, connectionId, user.id)
+      .run();
+
+    return c.json({
+      success: true,
+      message: 'Label akun berhasil diperbarui',
+      accountLabel,
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message || 'Gagal memperbarui label akun' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
 // DELETE /api/composio/connections/:id
 // Disconnects / removes social media account
 // -------------------------------------------------------------
@@ -1287,14 +1406,21 @@ composioRouter.get('/attribution', async (c) => {
   try {
     await ensureSocialTables(c.env.DB);
 
-    // Dapatkan semua project ID milik user
-    const projects = await c.env.DB.prepare(
-      `SELECT id, name FROM projects WHERE owner_id = ? OR id = 'prj_default';`
-    ).bind(user.id).all<any>();
+    const reqProjectId = c.req.query('projectId');
 
-    const projectIds = (projects.results || []).map((p: any) => p.id);
-    if (projectIds.length === 0) {
-      projectIds.push('prj_default');
+    // Dapatkan project ID milik user atau filter per project spesifik jika diminta
+    let projectIds: string[] = [];
+    if (reqProjectId) {
+      projectIds = [reqProjectId];
+    } else {
+      const projects = await c.env.DB.prepare(
+        `SELECT id, name FROM projects WHERE owner_id = ? OR id = 'prj_default';`
+      ).bind(user.id).all<any>();
+
+      projectIds = (projects.results || []).map((p: any) => p.id);
+      if (projectIds.length === 0) {
+        projectIds.push('prj_default');
+      }
     }
 
     const placeholders = projectIds.map(() => '?').join(',');
@@ -1425,9 +1551,16 @@ composioRouter.get('/links', async (c) => {
   try {
     await ensureSocialTables(c.env.DB);
 
-    const links = await c.env.DB.prepare(
-      `SELECT * FROM social_campaign_links WHERE user_id = ? ORDER BY created_at DESC;`
-    ).bind(user.id).all<any>();
+    const reqProjectId = c.req.query('projectId');
+    let query = `SELECT * FROM social_campaign_links WHERE user_id = ?`;
+    const bindings: any[] = [user.id];
+    if (reqProjectId) {
+      query += ` AND project_id = ?`;
+      bindings.push(reqProjectId);
+    }
+    query += ` ORDER BY created_at DESC;`;
+
+    const links = await c.env.DB.prepare(query).bind(...bindings).all<any>();
 
     return c.json({
       success: true,
@@ -1482,7 +1615,7 @@ composioRouter.post('/links', async (c) => {
     const defaultProject = await c.env.DB.prepare(
       `SELECT id FROM projects WHERE owner_id = ? ORDER BY created_at ASC LIMIT 1;`
     ).bind(user.id).first<any>();
-    const projectId = defaultProject?.id || 'prj_default';
+    const projectId = String(body.projectId || defaultProject?.id || 'prj_default').trim();
 
     const id = 'link_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
 

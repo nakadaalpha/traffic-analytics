@@ -67,7 +67,10 @@ export default function TermsPage() {
             <section>
               <h2 className="text-base font-semibold text-zinc-900 mb-2">5. Kontak & Bantuan</h2>
               <p>
-                Jika Anda memiliki pertanyaan seputar ketentuan ini, silakan hubungi tim kami melalui email resmi dukungan di support@firenalytics.com.
+                Jika Anda memiliki pertanyaan seputar ketentuan ini atau memerlukan bantuan teknis, silakan hubungi tim kami melalui email resmi di{' '}
+                <a href="mailto:nakadaalpha@gmail.com" className="text-zinc-900 font-semibold underline underline-offset-2 hover:text-indigo-600 transition-colors">
+                  nakadaalpha@gmail.com
+                </a>.
               </p>
             </section>
           </div>

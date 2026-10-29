@@ -77,7 +77,10 @@ export default function PrivacyPage() {
             <section>
               <h2 className="text-base font-semibold text-zinc-900 mb-2">5. Kontak Privasi</h2>
               <p>
-                Untuk pertanyaan atau permintaan terkait data privasi Anda, silakan hubungi kami di privacy@firenalytics.com.
+                Untuk pertanyaan atau permintaan terkait data privasi Anda, silakan hubungi kami melalui email resmi di{' '}
+                <a href="mailto:nakadaalpha@gmail.com" className="text-zinc-900 font-semibold underline underline-offset-2 hover:text-indigo-600 transition-colors">
+                  nakadaalpha@gmail.com
+                </a>.
               </p>
             </section>
           </div>
