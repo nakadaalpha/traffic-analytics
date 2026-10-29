@@ -534,6 +534,18 @@ app.get('/tracker.js', (c) => {
     true
   );
 
+  // Auto-Track Link-in-Bio Landing: otomatis rekam 1 klik saat tautan bio dibuka
+  try {
+    var initialAttr = getAttribution();
+    if (initialAttr && initialAttr.utmCampaign) {
+      var landingKey = 'tracked_bio_visit_' + initialAttr.utmCampaign;
+      if (!window.sessionStorage.getItem(landingKey)) {
+        window.sessionStorage.setItem(landingKey, 'true');
+        sendTracking('tautan-bio-' + (initialAttr.socialPlatform || 'sosial'));
+      }
+    }
+  } catch (errLanding) {}
+
   // Ekspos fungsi kustom jika user ingin tracking manual via JS: window.clickTracker.track('nama_event')
   window.clickTracker = {
     track: function (elementId) {

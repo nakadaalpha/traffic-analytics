@@ -2,6 +2,7 @@ name = "traffic-analytics-api"
 main = "src/worker.ts"
 compatibility_date = "2024-04-01"
 compatibility_flags = ["nodejs_compat"]
+account_id = "1e0a7726e8d0dda8f2a40a61d5297037"
 
 [[d1_databases]]
 binding = "DB"

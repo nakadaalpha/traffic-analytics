@@ -99,6 +99,19 @@ export async function handleSocialMediaSync(env: SyncJobEnv): Promise<void> {
                   if (ch.statistics.viewCount !== undefined) currentViews = Number(ch.statistics.viewCount);
                   if (ch.statistics.videoCount !== undefined) currentVideos = Number(ch.statistics.videoCount);
                 }
+
+                // Jika data viewCount channel masih 0 karena jeda sinkronisasi Google API,
+                // ambil total penayangan dari seluruh video yang ada pada channel ini
+                if (currentViews === 0) {
+                  try {
+                    const sumViewsRes: any = await env.DB.prepare(
+                      `SELECT COALESCE(SUM(views_count), 0) as total FROM social_posts WHERE connection_id = ?;`
+                    ).bind(conn.id).first();
+                    if (sumViewsRes && Number(sumViewsRes.total) > 0) {
+                      currentViews = Number(sumViewsRes.total);
+                    }
+                  } catch {}
+                }
                 const chHandle = ch.snippet?.customUrl || (ch.snippet?.title ? (ch.snippet.title.startsWith('@') ? ch.snippet.title : `@${ch.snippet.title}`) : null);
                 if (chHandle) {
                   await env.DB.prepare(`UPDATE social_connections SET account_handle = ? WHERE id = ?;`).bind(chHandle, conn.id).run();
@@ -522,6 +535,48 @@ export async function syncSocialPostsForConnection(
                 if (vidStatsRes && vidStatsRes.data && Array.isArray(vidStatsRes.data.items)) {
                   for (const v of vidStatsRes.data.items) {
                     videoDetailsMap.set(v.id, v);
+                  }
+                }
+              }
+
+              // Fallback Cerdas: Jika API belum memberikan metrik lengkap atau views masih 0,
+              // ambil metrik penayangan riil (views & likes) langsung dari halaman YouTube
+              for (const item of rawVideoItems) {
+                const vidId = item.contentDetails?.videoId || item.snippet?.resourceId?.videoId || item.id?.videoId || item.id;
+                const existing = vidId ? videoDetailsMap.get(vidId) : null;
+                const viewsInDetails = Number(existing?.statistics?.viewCount || 0);
+
+                if (vidId && (!existing || viewsInDetails === 0)) {
+                  try {
+                    const vidPageRes = await fetch(`https://www.youtube.com/watch?v=${vidId}`, {
+                      headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                      },
+                    }).catch(() => null);
+
+                    if (vidPageRes && vidPageRes.ok) {
+                      const vHtml = await vidPageRes.text();
+                      let liveViews = 0;
+                      let liveLikes = 0;
+                      const vMatch = vHtml.match(/"viewCount":"(\d+)"/) || vHtml.match(/"views":\{"simpleText":"([\d,]+)/);
+                      if (vMatch) liveViews = Number(vMatch[1].replace(/,/g, ''));
+
+                      const lMatch = vHtml.match(/"likeCount":"(\d+)"/) || vHtml.match(/"defaultText":\{"accessibility":\{"accessibilityData":\{"label":"(\d+) likes"/);
+                      if (lMatch) liveLikes = Number(lMatch[1] || lMatch[2]);
+
+                      videoDetailsMap.set(vidId, {
+                        statistics: {
+                          viewCount: liveViews,
+                          likeCount: liveLikes,
+                          commentCount: existing?.statistics?.commentCount || 0,
+                        },
+                        snippet: existing?.snippet || item.snippet,
+                        contentDetails: existing?.contentDetails,
+                      });
+                    }
+                  } catch (e) {
+                    console.warn(`[Social Sync] Could not fetch live YouTube stats for ${vidId}:`, e);
                   }
                 }
               }
