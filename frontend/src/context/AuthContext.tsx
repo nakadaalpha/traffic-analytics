@@ -52,8 +52,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
       }
+
+      // Jika server menolak sesi (401 Unauthorized / Token Invalid / Expired)
+      if (res.status === 401) {
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('auth_user');
+          localStorage.removeItem('auth_token');
+          if (window.location.pathname.startsWith('/dashboard')) {
+            window.location.href = '/login?expired=true';
+            return;
+          }
+        }
+        setUser(null);
+        return;
+      }
       
-      // Fallback: periksa localStorage jika cookie terblokir oleh browser
+      // Fallback: periksa localStorage jika cookie terblokir oleh browser (namun bukan karena 401)
       const local = localStorage.getItem('auth_user');
       if (local) {
         try {

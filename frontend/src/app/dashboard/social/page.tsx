@@ -1208,6 +1208,36 @@ export default function SocialMediaPage() {
         </div>
       )}
 
+      {/* Empty State Banner: Workspace Belum Memiliki Akun Terhubung */}
+      {!loading && connections.length === 0 && (
+        <div className="bg-gradient-to-r from-indigo-50/80 via-blue-50/50 to-zinc-50 border border-indigo-100 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-2xs">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-xs font-bold text-zinc-900 flex items-center gap-2">
+                <span>Workspace &ldquo;{currentProject?.name || 'Aktif'}&rdquo; belum memiliki akun media sosial</span>
+              </h3>
+              <p className="text-[11px] text-zinc-600 leading-relaxed max-w-xl">
+                Setiap workspace memiliki data analitik yang terisolasi. Jika akun media sosial Anda berada di workspace lain, silakan beralih melalui menu di navbar atas, atau hubungkan akun baru untuk workspace ini di bawah.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const el = document.getElementById('platforms-integration-section');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shrink-0 transition-all shadow-xs cursor-pointer flex items-center gap-1.5"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Hubungkan Akun Baru</span>
+          </button>
+        </div>
+      )}
+
       {/* KPI Highlight Summary Cards (Dinamis Real-Time) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Total Followers / Subscribers */}
@@ -2211,7 +2241,7 @@ export default function SocialMediaPage() {
       </div>
 
       {/* Platform Media Sosial Tersedia */}
-      <div className="bg-white border border-zinc-200 rounded-xl shadow-xs overflow-hidden">
+      <div id="platforms-integration-section" className="bg-white border border-zinc-200 rounded-xl shadow-xs overflow-hidden scroll-mt-24">
         <div className="p-5 border-b border-zinc-200 flex flex-wrap items-center justify-between gap-4 bg-white">
           <div className="space-y-1">
             <div className="flex items-center gap-2">

@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { Zap, Eye, EyeOff, AlertCircle, ArrowRight, Loader2 } from 'lucide-react';
+import { Zap, Eye, EyeOff, AlertCircle, ArrowRight, Loader2, ShieldAlert } from 'lucide-react';
 
 export default function LoginPage() {
   const [identifier, setIdentifier] = useState('');
@@ -13,6 +13,16 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('expired') === 'true') {
+        setSessionExpiredNotice(true);
+      }
+    }
+  }, []);
 
   const router = useRouter();
   const { login } = useAuth();
@@ -70,6 +80,13 @@ export default function LoginPage() {
 
         {/* Card Form */}
         <div className="bg-white border border-zinc-200 rounded-xl p-7 shadow-sm space-y-5">
+          {sessionExpiredNotice && (
+            <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 shrink-0 text-amber-600" />
+              <span>Sesi Anda telah berakhir demi keamanan. Silakan masuk kembali untuk melanjutkan.</span>
+            </div>
+          )}
+
           {error && (
             <div className="p-3.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-medium flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />

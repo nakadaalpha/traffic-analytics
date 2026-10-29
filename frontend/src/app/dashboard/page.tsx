@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import MetricsLiveTable, { MetricRow } from '@/components/analytics/MetricsLiveTable';
 import AnalyticsChartJsDemo, { ClickEventRow } from '@/components/analytics/AnalyticsChartJsDemo';
 import {
@@ -153,6 +154,31 @@ export default function DashboardOverviewPage() {
           </button>
         </div>
       </div>
+
+      {/* Empty State Banner jika Workspace belum ada event */}
+      {!loading && metrics.length === 0 && events.length === 0 && (
+        <div className="bg-gradient-to-r from-blue-50/70 via-indigo-50/50 to-zinc-50 border border-blue-100 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-2xs">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
+              <MousePointerClick className="w-4 h-4" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-xs font-bold text-zinc-900">
+                Workspace &ldquo;{currentProject?.name || 'Aktif'}&rdquo; belum memiliki data event tracking
+              </h3>
+              <p className="text-[11px] text-zinc-600 leading-relaxed max-w-xl">
+                Pasang script tracker di website Anda atau salin kode tombol CTA dari menu <strong>Manajemen & Integrasi</strong> untuk mulai merekam klik. Anda juga dapat beralih ke workspace lain di navbar atas.
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/dashboard/projects"
+            className="px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shrink-0 transition-all shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+          >
+            <span>Panduan Pasang Tracker</span>
+          </Link>
+        </div>
+      )}
 
       {/* KPI Highlight Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
