@@ -71,6 +71,34 @@ ChartJS.register(
   Filler
 );
 
+/**
+ * Normalizes SQLite UTC timestamps (YYYY-MM-DD HH:MM:SS) to ISO-8601 UTC string ending with Z
+ * so client browsers correctly parse them in the user's local timezone (e.g. WIB / UTC+7).
+ */
+function parseUtcDate(dateStr: string | null | undefined): Date | null {
+  if (!dateStr) return null;
+  const s = String(dateStr).trim();
+  if (!s) return null;
+  const iso = s.includes('T') ? (s.endsWith('Z') || s.includes('+') ? s : `${s}Z`) : `${s.replace(' ', 'T')}Z`;
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function formatLocalTime(dateStr: string | null | undefined): string {
+  const d = parseUtcDate(dateStr);
+  return d ? d.toLocaleTimeString('id-ID') : '-';
+}
+
+function formatLocalDateTime(dateStr: string | null | undefined): string {
+  const d = parseUtcDate(dateStr);
+  return d ? d.toLocaleString('id-ID') : '-';
+}
+
+function formatLocalDate(dateStr: string | null | undefined, options?: Intl.DateTimeFormatOptions): string {
+  const d = parseUtcDate(dateStr);
+  return d ? d.toLocaleDateString('id-ID', options) : '-';
+}
+
 interface SocialConnection {
   id: string;
   user_id: string;
@@ -388,8 +416,21 @@ export default function SocialMediaPage() {
   // State Metrik Analitik Real-Time & Grafik
   const [metricsData, setMetricsData] = useState<SocialMetricsData | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(false);
-  const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
+  const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('firenalytics_selected_conn_id') || null;
+    }
+    return null;
+  });
   const [chartMetric, setChartMetric] = useState<'subscribers' | 'views'>('subscribers');
+
+  const handleSelectConnection = (id: string) => {
+    setSelectedConnectionId(id);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('firenalytics_selected_conn_id', id);
+    }
+    fetchMetrics(id);
+  };
 
   // State Analisa Performa Konten (Video & Postingan)
   const [posts, setPosts] = useState<SocialPost[]>([]);
@@ -486,7 +527,12 @@ export default function SocialMediaPage() {
   const fetchMetrics = useCallback(async (connId?: string) => {
     try {
       setMetricsLoading(true);
-      const targetId = connId !== undefined ? connId : selectedConnectionId;
+      let targetId = connId !== undefined ? connId : selectedConnectionId;
+      if (!targetId && typeof window !== 'undefined') {
+        const savedId = localStorage.getItem('firenalytics_selected_conn_id');
+        if (savedId) targetId = savedId;
+      }
+
       const params = new URLSearchParams();
       if (targetId) params.append('connectionId', targetId);
       if (currentProject?.id) params.append('projectId', currentProject.id);
@@ -500,8 +546,12 @@ export default function SocialMediaPage() {
         const json = await res.json();
         if (json.success) {
           setMetricsData(json);
-          if (!selectedConnectionId && json.primaryAccount?.id) {
-            setSelectedConnectionId(json.primaryAccount.id);
+          const activeId = targetId || json.primaryAccount?.id;
+          if (activeId) {
+            setSelectedConnectionId(activeId);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('firenalytics_selected_conn_id', activeId);
+            }
           }
         }
       }
@@ -1151,8 +1201,7 @@ export default function SocialMediaPage() {
                 value={selectedConnectionId || metricsData?.summary?.connectionId || ''}
                 onChange={(e) => {
                   const newId = e.target.value;
-                  setSelectedConnectionId(newId);
-                  fetchMetrics(newId);
+                  handleSelectConnection(newId);
                 }}
                 className="bg-transparent text-xs font-semibold text-zinc-800 focus:outline-none cursor-pointer pr-1"
               >
@@ -1297,7 +1346,7 @@ export default function SocialMediaPage() {
           </div>
           <div className="text-sm font-bold text-zinc-900 font-mono">
             {metricsData?.summary?.lastSyncedAt
-              ? new Date(metricsData.summary.lastSyncedAt).toLocaleTimeString('id-ID')
+              ? formatLocalTime(metricsData.summary.lastSyncedAt)
               : 'Baru saja'}
           </div>
           <div className="text-[11px] text-zinc-500 flex items-center gap-1.5 pt-1">
@@ -1490,7 +1539,7 @@ export default function SocialMediaPage() {
                           <span className="capitalize">{post.platform}</span>
                         </span>
                         <span className="text-[11px] text-zinc-400 font-mono">
-                          {new Date(post.publishedAt).toLocaleDateString('id-ID', {
+                          {formatLocalDate(post.publishedAt, {
                             day: 'numeric',
                             month: 'short',
                             year: 'numeric',
@@ -2204,7 +2253,7 @@ export default function SocialMediaPage() {
                     return (
                       <tr key={conv.id} className="hover:bg-zinc-50/60 transition-colors">
                         <td className="py-2.5 px-4 font-mono text-[11px] text-zinc-500 whitespace-nowrap">
-                          {new Date(conv.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          {formatLocalTime(conv.created_at)}
                         </td>
                         <td className="py-2.5 px-4">
                           <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${pObj?.badgeColor || 'bg-zinc-100 text-zinc-700 border-zinc-200'}`}>
@@ -2538,14 +2587,14 @@ export default function SocialMediaPage() {
                       {conn.last_synced_at ? (
                         <div className="flex items-center gap-1.5 text-zinc-600">
                           <Clock className="w-3 h-3 text-zinc-400" />
-                          <span>{new Date(conn.last_synced_at).toLocaleString('id-ID')}</span>
+                          <span>{formatLocalDateTime(conn.last_synced_at)}</span>
                         </div>
                       ) : (
                         <span className="text-zinc-400 italic">Belum disinkron</span>
                       )}
                     </td>
                     <td className="py-3.5 px-6 text-zinc-400">
-                      {new Date(conn.created_at).toLocaleDateString('id-ID')}
+                      {formatLocalDate(conn.created_at)}
                     </td>
                     <td className="py-3.5 px-6 text-right">
                       {isViewer ? (
@@ -2742,13 +2791,7 @@ export default function SocialMediaPage() {
                         const isGeneric = !c.username || c.username.toLowerCase().includes('pengguna') || c.username.toLowerCase().includes('user');
                         const displayUsername = isGeneric ? `Pengguna ${platformLabel}` : `@${c.username.replace(/^@/, '')}`;
                         const dateStr = c.timestamp
-                          ? new Date(c.timestamp).toLocaleString('id-ID', {
-                              day: 'numeric',
-                              month: 'short',
-                              year: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })
+                          ? formatLocalDateTime(c.timestamp)
                           : '';
 
                         return (

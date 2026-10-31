@@ -19,6 +19,20 @@ export type ComposioEnv = {
 
 const composioRouter = new Hono<ComposioEnv>();
 
+/**
+ * Normalizes SQLite UTC timestamps (YYYY-MM-DD HH:MM:SS) to ISO-8601 UTC string ending with Z
+ * so client browsers correctly parse them in the user's local timezone (e.g. WIB / UTC+7).
+ */
+export function formatIsoUtc(dateStr: string | null | undefined): string | null {
+  if (!dateStr) return null;
+  const s = String(dateStr).trim();
+  if (!s) return null;
+  if (s.includes('T')) {
+    return s.endsWith('Z') || s.includes('+') ? s : `${s}Z`;
+  }
+  return `${s.replace(' ', 'T')}Z`;
+}
+
 let socialTablesInitialized = false;
 
 /**
@@ -453,7 +467,11 @@ composioRouter.get('/status', async (c) => {
     return c.json({
       success: true,
       count: results.length,
-      data: results,
+      data: results.map((r: any) => ({
+        ...r,
+        last_synced_at: formatIsoUtc(r.last_synced_at),
+        created_at: formatIsoUtc(r.created_at),
+      })),
     });
   } catch (err: any) {
     console.error('[Composio Status Error]', err.message);
@@ -584,11 +602,14 @@ composioRouter.get('/metrics', async (c) => {
         accountHandle: conn.account_handle || null,
         accountLabel: conn.account_label || 'Akun Utama',
         projectId: conn.project_id || null,
-        lastSyncedAt: conn.last_synced_at,
+        lastSyncedAt: formatIsoUtc(conn.last_synced_at),
+        createdAt: formatIsoUtc(conn.created_at),
       })),
       primaryAccount: {
         ...primaryAccount,
         accountLabel: primaryAccount.account_label || 'Akun Utama',
+        last_synced_at: formatIsoUtc(primaryAccount.last_synced_at),
+        created_at: formatIsoUtc(primaryAccount.created_at),
       },
       summary: {
         connectionId: primaryAccount.id,
@@ -596,7 +617,7 @@ composioRouter.get('/metrics', async (c) => {
         views: latestViews,
         videos: latestVideos,
         growthRate: growthDelta,
-        lastSyncedAt: primaryAccount?.last_synced_at,
+        lastSyncedAt: formatIsoUtc(primaryAccount?.last_synced_at),
         platform: primaryAccount?.platform,
         accountHandle: primaryAccount?.account_handle || null,
         accountLabel: primaryAccount?.account_label || 'Akun Utama',
@@ -772,7 +793,7 @@ composioRouter.get('/posts', async (c) => {
         titleOrCaption: r.title_or_caption,
         thumbnailUrl: r.thumbnail_url,
         permalink: r.permalink,
-        publishedAt: r.published_at,
+        publishedAt: formatIsoUtc(r.published_at) || r.published_at,
         viewsCount: views,
         likesCount: likes,
         commentsCount: comments,
@@ -782,7 +803,7 @@ composioRouter.get('/posts', async (c) => {
         accountHandle: r.account_handle,
         accountLabel: r.account_label || 'Akun Utama',
         projectId: r.project_id || null,
-        lastSyncedAt: r.last_synced_at,
+        lastSyncedAt: formatIsoUtc(r.last_synced_at),
       };
     });
 
