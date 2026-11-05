@@ -832,19 +832,31 @@ app.post('/api/track/projects', async (c) => {
 
     const body = await c.req.json().catch(() => ({}));
     const name = (body.name || '').trim();
-    const domain = (body.domain || '').trim();
-
-    if (!name || !domain) {
-      return c.json({ success: false, error: 'Nama project dan domain wajib diisi' }, 400);
+    let rawDomain = (body.domain || '').trim();
+    if (!rawDomain && Array.isArray(body.allowedOrigins) && body.allowedOrigins.length > 0) {
+      rawDomain = String(body.allowedOrigins[0] || '').trim();
+    } else if (!rawDomain && typeof body.allowedOrigins === 'string') {
+      rawDomain = body.allowedOrigins.trim();
     }
 
-    const idSlug = name.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 30);
+    if (!name) {
+      return c.json({ success: false, error: 'Nama workspace wajib diisi' }, 400);
+    }
+
+    const idSlug = name.toLowerCase().replace(/[^a-z0-9]/g, '_').slice(0, 30) || 'workspace';
     const projectId = `prj_${idSlug}_${Math.random().toString(36).substring(2, 6)}`;
     const writeKey = `pk_live_${Math.random().toString(36).substring(2, 10)}${Date.now().toString(36)}`;
 
-    // Normalisasi domain input (bersihkan trailing slash, protokol, dll)
-    const normalizedDomain = extractHostname(domain) || domain.replace(/\/+$/, '');
-    const allowedOrigins = [normalizedDomain];
+    // Normalisasi domain input jika diisi (opsional)
+    let allowedOrigins: string[] = [];
+    if (Array.isArray(body.allowedOrigins) && body.allowedOrigins.length > 0) {
+      allowedOrigins = body.allowedOrigins
+        .map((d: string) => extractHostname(d) || String(d).trim().replace(/\/+$/, ''))
+        .filter(Boolean);
+    } else if (rawDomain) {
+      const normalizedDomain = extractHostname(rawDomain) || rawDomain.replace(/\/+$/, '');
+      if (normalizedDomain) allowedOrigins = [normalizedDomain];
+    }
 
     await c.env.DB.prepare(
       `INSERT INTO projects (id, name, public_write_key, allowed_origins, is_active, owner_id)
@@ -852,6 +864,18 @@ app.post('/api/track/projects', async (c) => {
     )
       .bind(projectId, name, writeKey, JSON.stringify(allowedOrigins), ownerId)
       .run();
+
+    // Pastikan owner terdaftar juga di project_members
+    if (ownerId) {
+      const pmId = `pm_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+      await c.env.DB.prepare(
+        `INSERT OR IGNORE INTO project_members (id, project_id, user_id, role, invited_by, created_at)
+         VALUES (?, ?, ?, 'owner', ?, datetime('now'));`
+      )
+        .bind(pmId, projectId, ownerId, ownerId)
+        .run()
+        .catch((err: any) => console.warn('[Auto Member Insert Warning]', err.message));
+    }
 
     return c.json(
       {

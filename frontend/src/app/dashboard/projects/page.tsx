@@ -242,19 +242,21 @@ export default function ProjectsPage() {
     }
   }, [currentProject, projects, selectedProject?.id]);
 
-  // 2. Tambah Project Baru
+  // 2. Tambah Project / Workspace Baru
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!projectName.trim() || !projectDomain.trim()) return;
+    if (!projectName.trim()) return;
 
     try {
       setIsSubmitting(true);
       setMessage(null);
 
-      const origins = projectDomain
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const origins = projectDomain.trim()
+        ? projectDomain
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [];
 
       const res = await fetch("/api/track/projects", {
         method: "POST",
@@ -262,6 +264,7 @@ export default function ProjectsPage() {
         credentials: "include",
         body: JSON.stringify({
           name: projectName.trim(),
+          domain: origins[0] || "",
           allowedOrigins: origins,
         }),
       });
@@ -269,12 +272,12 @@ export default function ProjectsPage() {
       const json = await res.json();
 
       if (!res.ok) {
-        throw new Error(json.error || "Gagal membuat project baru.");
+        throw new Error(json.error || "Gagal membuat workspace baru.");
       }
 
       setMessage({
         type: "success",
-        text: `Project "${projectName}" berhasil didaftarkan.`,
+        text: `Workspace "${projectName}" berhasil didaftarkan.`,
       });
 
       const newProj = json.data;
@@ -288,7 +291,7 @@ export default function ProjectsPage() {
     } catch (err: any) {
       setMessage({
         type: "error",
-        text: err.message || "Terjadi kesalahan saat membuat project.",
+        text: err.message || "Terjadi kesalahan saat membuat workspace.",
       });
     } finally {
       setIsSubmitting(false);
@@ -535,12 +538,17 @@ export default function ProjectsPage() {
         </div>
       </div>
 
-      {/* Formulir Tambah Project Baru */}
+      {/* Formulir Tambah Workspace Baru */}
       <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-4">
-        <h2 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
-          <Plus className="w-4 h-4 text-zinc-700" />
-          <span>Daftarkan Website Baru</span>
-        </h2>
+        <div>
+          <h2 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+            <Plus className="w-4 h-4 text-zinc-700" />
+            <span>Tambah Ruang Kerja (Workspace) Baru</span>
+          </h2>
+          <p className="text-xs text-zinc-500 mt-1">
+            Buat ruang kerja untuk memantau analitik traffic website, akun media sosial (TikTok, YouTube, IG), atau pesan leads masuk (WhatsApp, Gmail, DM).
+          </p>
+        </div>
 
         {message && (
           <div
@@ -561,45 +569,52 @@ export default function ProjectsPage() {
 
         <form
           onSubmit={handleCreateProject}
-          className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
+          className="space-y-3"
         >
-          <div className="sm:col-span-5 space-y-1">
-            <label className="text-xs font-semibold text-zinc-700">
-              Nama Website / Project
-            </label>
-            <input
-              type="text"
-              placeholder="Contoh: Portfolio Saya / Toko Online"
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 transition-colors"
-              required
-            />
-          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-start">
+            <div className="sm:col-span-5 space-y-1">
+              <label className="text-xs font-semibold text-zinc-700 flex items-center gap-1">
+                <span>Nama Workspace</span>
+                <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Contoh: Agensi Kopi Kenangan / Personal Brand"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 transition-colors"
+                required
+              />
+            </div>
 
-          <div className="sm:col-span-5 space-y-1">
-            <label className="text-xs font-semibold text-zinc-700">
-              Domain Website
-            </label>
-            <input
-              type="text"
-              placeholder="Contoh: https://myportofolio.vercel.app"
-              value={projectDomain}
-              onChange={(e) => setProjectDomain(e.target.value)}
-              className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 transition-colors font-mono"
-              required
-            />
-          </div>
+            <div className="sm:col-span-5 space-y-1">
+              <label className="text-xs font-semibold text-zinc-700 flex items-center justify-between">
+                <span>Domain Website</span>
+                <span className="text-[10px] text-zinc-400 font-normal">Opsional</span>
+              </label>
+              <input
+                type="text"
+                placeholder="Contoh: mybrand.com (kosongkan jika tanpa website)"
+                value={projectDomain}
+                onChange={(e) => setProjectDomain(e.target.value)}
+                className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:border-zinc-900 transition-colors font-mono"
+              />
+            </div>
 
-          <div className="sm:col-span-2">
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium text-xs py-2 px-4 rounded-lg shadow-sm transition-all active:scale-[0.98] cursor-pointer h-[38px] flex items-center justify-center gap-1.5"
-            >
-              {isSubmitting ? "Menyimpan..." : "Buat Project"}
-            </button>
+            <div className="sm:col-span-2 pt-6">
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium text-xs py-2 px-4 rounded-lg shadow-sm transition-all active:scale-[0.98] cursor-pointer h-[38px] flex items-center justify-center gap-1.5"
+              >
+                {isSubmitting ? "Menyimpan..." : "Buat Workspace"}
+              </button>
+            </div>
           </div>
+          
+          <p className="text-[11px] text-zinc-400">
+            💡 <strong>Info:</strong> Domain website bersifat opsional. Jika Anda hanya ingin mengelola <strong>Media Sosial</strong> atau <strong>Leads WhatsApp/DM</strong>, kosongkan kolom domain. Anda dapat menghubungkan website kapan saja nanti.
+          </p>
         </form>
       </div>
 
@@ -718,15 +733,35 @@ export default function ProjectsPage() {
                       <Globe className="w-3 h-3 text-zinc-400" />
                       Domain Terdaftar:
                     </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {proj.allowedOrigins.map((orig) => (
-                        <span
-                          key={orig}
-                          className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-700 font-mono text-[11px]"
-                        >
-                          {orig}
-                        </span>
-                      ))}
+                    <div className="flex flex-wrap gap-1.5 items-center">
+                      {proj.allowedOrigins && proj.allowedOrigins.length > 0 ? (
+                        proj.allowedOrigins.map((orig) => (
+                          <span
+                            key={orig}
+                            className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-700 font-mono text-[11px]"
+                          >
+                            {orig}
+                          </span>
+                        ))
+                      ) : (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-zinc-400 italic text-[11px]">
+                            Belum terhubung ke website (Sosmed & Leads)
+                          </span>
+                          {(!proj.role || proj.role === 'owner') && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStartEdit(proj);
+                              }}
+                              className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 underline cursor-pointer"
+                            >
+                              + Hubungkan Website
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1154,7 +1189,7 @@ export default function ProjectsPage() {
 
             <form onSubmit={handleSaveEdit} className="space-y-4">
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-zinc-700">Nama Website / Project</label>
+                <label className="text-xs font-semibold text-zinc-700">Nama Workspace</label>
                 <input
                   type="text"
                   value={editName}
@@ -1165,19 +1200,19 @@ export default function ProjectsPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-zinc-700">
-                  Domain Terdaftar (Pisahkan dengan koma jika lebih dari 1)
+                <label className="text-xs font-semibold text-zinc-700 flex items-center justify-between">
+                  <span>Domain Terdaftar (Pisahkan dengan koma jika lebih dari 1)</span>
+                  <span className="text-[10px] text-zinc-400 font-normal">Opsional</span>
                 </label>
                 <input
                   type="text"
                   value={editDomain}
                   onChange={(e) => setEditDomain(e.target.value)}
                   className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900 font-mono"
-                  placeholder="https://myportofolio.vercel.app, http://localhost:3000"
-                  required
+                  placeholder="https://myportofolio.vercel.app, http://localhost:3000 (kosongkan jika tanpa website)"
                 />
                 <span className="text-[10px] text-zinc-400 block">
-                  Domain localhost otomatis diizinkan untuk semua port saat pengujian lokal.
+                  Kosongkan jika workspace ini hanya difokuskan untuk Analitik Media Sosial atau Leads WhatsApp/DM.
                 </span>
               </div>
 
