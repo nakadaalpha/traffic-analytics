@@ -10,9 +10,10 @@ export interface SyncJobEnv {
  * Scheduled background worker job to sync social media metrics
  * (YouTube, Twitter/X, Instagram, etc.) via Composio v3 without blocking HTTP requests.
  */
-export async function handleSocialMediaSync(env: SyncJobEnv, targetConnectionId?: string): Promise<void> {
+export async function handleSocialMediaSync(env: SyncJobEnv, targetConnectionId?: string, force = false): Promise<void> {
   const startTime = Date.now();
-  console.log(`[Social Sync Cron] Starting background sync execution at ${new Date().toISOString()}`);
+  const isForce = force || !!targetConnectionId;
+  console.log(`[Social Sync Cron] Starting background sync execution at ${new Date().toISOString()} (force: ${isForce})`);
 
   try {
     await ensureSocialTables(env.DB);
@@ -266,7 +267,7 @@ export async function handleSocialMediaSync(env: SyncJobEnv, targetConnectionId?
         console.log(`[Social Sync Cron] Successfully recorded metrics for connection ${conn.id} (${conn.platform})`);
 
         // Sinkronisasi postingan/video untuk koneksi ini
-        await syncSocialPostsForConnection(env, conn, composio);
+        await syncSocialPostsForConnection(env, conn, composio, isForce);
       } catch (connError: any) {
         console.error(`[Social Sync Cron] Failed to process connection ${conn.id}:`, connError.message);
       }
@@ -313,8 +314,14 @@ export async function syncSocialPostsForConnection(
       }
     }
 
-    // Jika sudah ada dan tidak dipaksa force refresh, skip
-    if (existingCount > 0 && !force) {
+    // Self-healing check: Jika ada postingan yang memiliki thumbnail .mp4 atau views_count 0, lakukan perbaikan otomatis
+    const brokenStatsRes: any = await env.DB.prepare(
+      `SELECT COUNT(*) as broken FROM social_posts WHERE connection_id = ? AND (thumbnail_url LIKE '%.mp4%' OR views_count = 0);`
+    ).bind(conn.id).first().catch(() => null);
+    const hasBrokenData = Number(brokenStatsRes?.broken || 0) > 0;
+
+    // Jika sudah ada, tidak dipaksa force refresh, dan data sehat (tanpa thumbnail .mp4 / 0 views), skip
+    if (existingCount > 0 && !force && !hasBrokenData) {
       return;
     }
 
@@ -716,33 +723,68 @@ export async function syncSocialPostsForConnection(
                   let shares = Number(item.shares_count || 0);
 
                   const mediaType = (item.media_product_type || item.media_type || '').toUpperCase();
-                  const isReelOrVideo = mediaType === 'REELS' || mediaType === 'VIDEO';
+                  const isReelOrVideo = mediaType === 'REELS' || mediaType === 'VIDEO' || (typeof item.media_url === 'string' && item.media_url.includes('.mp4'));
 
                   // Ambil insight untuk postingan teratas jika composio aktif
                   if (idx < INSIGHT_LIMIT && item.id && composioClient && conn.composio_connection_id) {
                     try {
-                      const metricQuery = isReelOrVideo
-                        ? 'views,plays,reach,saved,total_interactions'
-                        : 'impressions,reach,saved,total_interactions';
+                      let insightsRes: any = null;
 
-                      let insightsRes: any = await composioClient.tools.execute('INSTAGRAM_GET_IG_MEDIA_INSIGHTS', {
-                        connectedAccountId: conn.composio_connection_id,
-                        userId: conn.user_id,
-                        arguments: {
-                          ig_media_id: item.id,
-                          metric: metricQuery,
-                        },
-                      }).catch(() => null);
-
-                      if (!insightsRes || !insightsRes.data || !Array.isArray(insightsRes.data.data)) {
+                      if (isReelOrVideo) {
+                        // Opsi 1: Metrik standar Reels resmi di Meta Graph API (plays, reach, saved, total_interactions)
                         insightsRes = await composioClient.tools.execute('INSTAGRAM_GET_IG_MEDIA_INSIGHTS', {
                           connectedAccountId: conn.composio_connection_id,
                           userId: conn.user_id,
                           arguments: {
                             ig_media_id: item.id,
-                            metric: 'reach,total_interactions',
+                            metric: 'plays,reach,saved,total_interactions',
                           },
                         }).catch(() => null);
+
+                        // Opsi 2: Fallback jika akun menggunakan Meta v21+ (views, reach, saved, total_interactions)
+                        if (!insightsRes || !insightsRes.data || !Array.isArray(insightsRes.data.data)) {
+                          insightsRes = await composioClient.tools.execute('INSTAGRAM_GET_IG_MEDIA_INSIGHTS', {
+                            connectedAccountId: conn.composio_connection_id,
+                            userId: conn.user_id,
+                            arguments: {
+                              ig_media_id: item.id,
+                              metric: 'views,reach,saved,total_interactions',
+                            },
+                          }).catch(() => null);
+                        }
+
+                        // Opsi 3: Fallback minimal reach & total_interactions
+                        if (!insightsRes || !insightsRes.data || !Array.isArray(insightsRes.data.data)) {
+                          insightsRes = await composioClient.tools.execute('INSTAGRAM_GET_IG_MEDIA_INSIGHTS', {
+                            connectedAccountId: conn.composio_connection_id,
+                            userId: conn.user_id,
+                            arguments: {
+                              ig_media_id: item.id,
+                              metric: 'reach,total_interactions',
+                            },
+                          }).catch(() => null);
+                        }
+                      } else {
+                        // Untuk Foto & Carousel: impressions, reach, saved, total_interactions
+                        insightsRes = await composioClient.tools.execute('INSTAGRAM_GET_IG_MEDIA_INSIGHTS', {
+                          connectedAccountId: conn.composio_connection_id,
+                          userId: conn.user_id,
+                          arguments: {
+                            ig_media_id: item.id,
+                            metric: 'impressions,reach,saved,total_interactions',
+                          },
+                        }).catch(() => null);
+
+                        if (!insightsRes || !insightsRes.data || !Array.isArray(insightsRes.data.data)) {
+                          insightsRes = await composioClient.tools.execute('INSTAGRAM_GET_IG_MEDIA_INSIGHTS', {
+                            connectedAccountId: conn.composio_connection_id,
+                            userId: conn.user_id,
+                            arguments: {
+                              ig_media_id: item.id,
+                              metric: 'reach,total_interactions',
+                            },
+                          }).catch(() => null);
+                        }
                       }
 
                       if (insightsRes && insightsRes.data && Array.isArray(insightsRes.data.data)) {
@@ -773,9 +815,9 @@ export async function syncSocialPostsForConnection(
                     }
                   }
 
-                  // Fallback views jika masih 0: gunakan reach atau view_count
+                  // Fallback views jika masih 0: gunakan reach atau view_count atau plays_count
                   if (views <= 0) {
-                    views = Number(item.view_count || item.total_views_count || 0);
+                    views = Number(item.view_count || item.total_views_count || item.plays_count || 0);
                   }
 
                   const rate = views > 0 ? (((likes + comments) / views) * 100).toFixed(1) + '%' : '0%';
@@ -785,18 +827,31 @@ export async function syncSocialPostsForConnection(
                     conn.account_handle = formatted;
                   }
 
+                  // Resolusi Thumbnail yang Benar:
+                  // Untuk Video/Reels: thumbnail_url atau cover_media_url adalah poster gambar JPEG yang sah.
+                  // item.media_url pada Reels/Video adalah file .mp4 yang menyebabkan kotak hitam jika dipasang pada tag <img>.
+                  const isReelOrVid = isReelOrVideo ||
+                    item.media_type === 'VIDEO' ||
+                    item.media_type === 'REELS' ||
+                    item.media_product_type === 'REELS' ||
+                    (typeof item.media_url === 'string' && item.media_url.includes('.mp4'));
+
+                  const resolvedThumbnail = isReelOrVid
+                    ? (item.thumbnail_url || item.cover_media_url || item.media_url || null)
+                    : (item.media_url || item.thumbnail_url || null);
+
                   return {
                     id: `post_ig_${conn.id}_${item.id || idx}`,
                     platform_post_id: item.id || `ig_${idx}`,
                     title_or_caption: item.caption || `Postingan Instagram ${conn.account_handle || ''}`,
-                    thumbnail_url: item.media_url || item.thumbnail_url || null,
+                    thumbnail_url: resolvedThumbnail,
                     permalink: item.permalink || `https://www.instagram.com/${(conn.account_handle || '').replace('@', '')}`,
                     views_count: views,
                     likes_count: likes,
                     comments_count: comments,
                     shares_count: shares,
                     additional_metrics: {
-                      media_type: item.media_product_type || item.media_type || 'POST',
+                      media_type: item.media_product_type || item.media_type || (isReelOrVid ? 'REELS' : 'POST'),
                       engagement_rate: rate,
                     },
                     published_at: item.timestamp || new Date().toISOString(),

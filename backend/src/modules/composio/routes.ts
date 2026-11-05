@@ -680,7 +680,7 @@ composioRouter.post('/sync', async (c) => {
     await handleSocialMediaSync({
       DB: c.env.DB,
       COMPOSIO_API_KEY: c.env.COMPOSIO_API_KEY,
-    }, targetConnectionId);
+    }, targetConnectionId, true);
 
     return c.json({
       success: true,
@@ -748,13 +748,19 @@ composioRouter.get('/posts', async (c) => {
       }
     }
 
+    const reqProjectId = c.req.query('projectId');
+    const reqConnectionId = c.req.query('connectionId');
+
     // Pastikan setiap koneksi memiliki data postingan di tabel social_posts
-    for (const conn of connections) {
+    const targetConns = reqConnectionId
+      ? connections.filter((conn: any) => conn.id === reqConnectionId)
+      : connections;
+
+    for (const conn of targetConns) {
       await syncSocialPostsForConnection(c.env, conn, composio, false);
     }
 
     // Susun query pengambilan data
-    const reqProjectId = c.req.query('projectId');
     let query = `
       SELECT p.id, p.connection_id, p.platform, p.platform_post_id, p.title_or_caption,
              p.thumbnail_url, p.permalink, p.published_at, p.views_count, p.likes_count,
@@ -769,6 +775,11 @@ composioRouter.get('/posts', async (c) => {
     if (reqProjectId) {
       query += ` AND (c.project_id = ? OR c.project_id IS NULL)`;
       params.push(reqProjectId);
+    }
+
+    if (reqConnectionId) {
+      query += ` AND p.connection_id = ?`;
+      params.push(reqConnectionId);
     }
 
     if (filterPlatform && filterPlatform !== 'all') {

@@ -431,6 +431,7 @@ export default function SocialMediaPage() {
       localStorage.setItem('firenalytics_selected_conn_id', id);
     }
     fetchMetrics(id);
+    fetchPosts(id);
   };
 
   // State Analisa Performa Konten (Video & Postingan)
@@ -564,12 +565,16 @@ export default function SocialMediaPage() {
   }, [getAuthHeaders, selectedConnectionId, currentProject?.id]);
 
   // Fetch daftar performa konten video & postingan dari D1
-  const fetchPosts = useCallback(async () => {
+  const fetchPosts = useCallback(async (connId?: string) => {
     try {
       setPostsLoading(true);
+      const targetConnId = connId !== undefined ? connId : selectedConnectionId;
       const params = new URLSearchParams();
       if (postPlatformFilter !== 'all') {
         params.append('platform', postPlatformFilter);
+      }
+      if (targetConnId) {
+        params.append('connectionId', targetConnId);
       }
       params.append('sort', postSortBy);
       if (currentProject?.id) {
@@ -592,7 +597,7 @@ export default function SocialMediaPage() {
     } finally {
       setPostsLoading(false);
     }
-  }, [getAuthHeaders, postPlatformFilter, postSortBy, currentProject?.id]);
+  }, [getAuthHeaders, postPlatformFilter, postSortBy, selectedConnectionId, currentProject?.id]);
 
   // Handler: Buka modal dan muat komentar riil untuk postingan spesifik
   const openCommentsModal = useCallback(async (post: SocialPost) => {
@@ -1550,12 +1555,19 @@ export default function SocialMediaPage() {
                   >
                     <div className="space-y-3">
                       {/* Header Card: Platform Badge + Waktu Rilis */}
-                      <div className="flex items-center justify-between">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1.5 border ${platformObj?.badgeColor || 'bg-zinc-100 text-zinc-700 border-zinc-200'}`}>
-                          {platformObj?.iconSvg}
-                          <span className="capitalize">{post.platform}</span>
-                        </span>
-                        <span className="text-[11px] text-zinc-400 font-mono">
+                      <div className="flex items-center justify-between gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1.5 border shrink-0 ${platformObj?.badgeColor || 'bg-zinc-100 text-zinc-700 border-zinc-200'}`}>
+                            {platformObj?.iconSvg}
+                            <span className="capitalize">{post.platform}</span>
+                          </span>
+                          {post.accountHandle && (
+                            <span className="text-[10px] font-semibold text-zinc-500 font-mono truncate max-w-[100px]" title={post.accountHandle}>
+                              {post.accountHandle}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[11px] text-zinc-400 font-mono shrink-0">
                           {formatLocalDate(post.publishedAt, {
                             day: 'numeric',
                             month: 'short',
@@ -1566,13 +1578,23 @@ export default function SocialMediaPage() {
 
                       {/* Preview Thumbnail / Media Container */}
                       {post.thumbnailUrl ? (
-                        <div className="relative rounded-lg overflow-hidden bg-zinc-950 aspect-[3/4] group/thumb">
-                          <img
-                            src={post.thumbnailUrl}
-                            alt={post.titleOrCaption}
-                            className="w-full h-full object-cover transition-transform duration-300 group-hover/thumb:scale-105"
-                            loading="lazy"
-                          />
+                        <div className="relative rounded-lg overflow-hidden bg-zinc-900 aspect-[3/4] group/thumb">
+                          {post.thumbnailUrl.includes('.mp4') ? (
+                            <video
+                              src={post.thumbnailUrl}
+                              className="w-full h-full object-cover"
+                              muted
+                              playsInline
+                              preload="metadata"
+                            />
+                          ) : (
+                            <img
+                              src={post.thumbnailUrl}
+                              alt={post.titleOrCaption}
+                              className="w-full h-full object-cover transition-transform duration-300 group-hover/thumb:scale-105"
+                              loading="lazy"
+                            />
+                          )}
                           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
                           {post.additionalMetrics?.duration && (
                             <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-xs text-[10px] font-mono font-semibold text-white">
