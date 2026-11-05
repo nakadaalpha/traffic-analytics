@@ -124,6 +124,7 @@ export async function handleSocialMediaSync(env: SyncJobEnv): Promise<void> {
                 userId: conn.user_id,
                 arguments: {
                   ig_user_id: 'me',
+                  limit: 100,
                   fields: 'id,caption,media_type,media_url,permalink,thumbnail_url,timestamp,username,comments_count,like_count,view_count,shares_count,owner',
                 },
               }).catch((e: any) => {
@@ -139,7 +140,7 @@ export async function handleSocialMediaSync(env: SyncJobEnv): Promise<void> {
                     0
                   );
 
-                  // Dapatkan jumlah follower riil langsung dari node pemilik akun di Instagram Graph API
+                  // Dapatkan jumlah follower & total postingan riil langsung dari node pemilik akun di Instagram Graph API
                   const ownerId = igRes.data.data[0]?.owner?.id;
                   if (ownerId) {
                     try {
@@ -156,6 +157,10 @@ export async function handleSocialMediaSync(env: SyncJobEnv): Promise<void> {
                       if (userObj && userObj.followers_count !== undefined) {
                         currentSubscribers = Number(userObj.followers_count);
                         console.log(`[Social Sync Cron] Real Instagram followers count fetched: ${currentSubscribers}`);
+                      }
+                      if (userObj && userObj.media_count !== undefined) {
+                        currentVideos = Number(userObj.media_count);
+                        console.log(`[Social Sync Cron] Real Instagram media_count fetched: ${currentVideos}`);
                       }
                     } catch (nodeErr: any) {
                       console.warn('[Social Sync Cron] Node fetch notice:', nodeErr.message);
@@ -678,6 +683,7 @@ export async function syncSocialPostsForConnection(
             userId: conn.user_id,
             arguments: {
               ig_user_id: 'me',
+              limit: 100,
               fields:
                 'id,caption,media_type,media_product_type,media_url,permalink,thumbnail_url,timestamp,username,comments_count,like_count,view_count,shares_count',
             },
