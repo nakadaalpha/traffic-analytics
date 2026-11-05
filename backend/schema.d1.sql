@@ -206,5 +206,34 @@ CREATE INDEX IF NOT EXISTS idx_social_links_user ON social_campaign_links (user_
 CREATE INDEX IF NOT EXISTS idx_social_links_project ON social_campaign_links (project_id);
 CREATE INDEX IF NOT EXISTS idx_social_links_platform ON social_campaign_links (platform);
 
+-- 11. Tabel inbound_leads: Pelacakan leads masuk dari pesan privat/DM (WhatsApp, Instagram, Facebook, Gmail)
+CREATE TABLE IF NOT EXISTS inbound_leads (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    connection_id TEXT,
+    platform TEXT NOT NULL, -- 'whatsapp', 'instagram', 'facebook', 'gmail'
+    external_sender_id TEXT NOT NULL,
+    sender_name TEXT,
+    sender_handle TEXT,
+    last_message TEXT,
+    thread_id TEXT,
+    status TEXT NOT NULL DEFAULT 'NEW', -- 'NEW', 'CONTACTED', 'QUALIFIED', 'CONVERTED', 'SPAM'
+    source_attribution TEXT,
+    unread INTEGER NOT NULL DEFAULT 1,
+    raw_metadata TEXT,
+    first_contact_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_contact_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_leads_project_time ON inbound_leads (project_id, last_contact_at DESC);
+CREATE INDEX IF NOT EXISTS idx_leads_platform ON inbound_leads (project_id, platform);
+CREATE INDEX IF NOT EXISTS idx_leads_status ON inbound_leads (project_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_dedupe ON inbound_leads (project_id, platform, external_sender_id);
+
+
 
 

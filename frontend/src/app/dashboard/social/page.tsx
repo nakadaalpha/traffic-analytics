@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import Link from 'next/link';
 import { createPortal } from 'react-dom';
 import {
   Chart as ChartJS,
@@ -1216,6 +1217,15 @@ export default function SocialMediaPage() {
               </select>
             </div>
           )}
+
+          <Link
+            href="/dashboard/leads"
+            className="h-9 px-3 text-xs bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 font-medium rounded-lg transition-all flex items-center gap-1.5 shadow-xs"
+            title="Buka Inbox Leads & Pesan Masuk (WhatsApp, IG DM, Messenger, Gmail)"
+          >
+            <MessageCircle className="w-3.5 h-3.5 text-blue-600" />
+            <span>Leads & DM</span>
+          </Link>
 
           <button
             type="button"

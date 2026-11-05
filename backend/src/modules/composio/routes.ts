@@ -141,6 +141,33 @@ export async function ensureSocialTables(db: D1Database) {
         CREATE INDEX IF NOT EXISTS idx_social_links_platform 
         ON social_campaign_links (platform);
       `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS inbound_leads (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          connection_id TEXT,
+          platform TEXT NOT NULL,
+          external_sender_id TEXT NOT NULL,
+          sender_name TEXT,
+          sender_handle TEXT,
+          last_message TEXT,
+          thread_id TEXT,
+          status TEXT NOT NULL DEFAULT 'NEW',
+          source_attribution TEXT,
+          unread INTEGER NOT NULL DEFAULT 1,
+          raw_metadata TEXT,
+          first_contact_at TEXT NOT NULL DEFAULT (datetime('now')),
+          last_contact_at TEXT NOT NULL DEFAULT (datetime('now')),
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+      `),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_leads_project_time ON inbound_leads (project_id, last_contact_at DESC);`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_leads_platform ON inbound_leads (project_id, platform);`),
+      db.prepare(`CREATE INDEX IF NOT EXISTS idx_leads_status ON inbound_leads (project_id, status);`),
+      db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_dedupe ON inbound_leads (project_id, platform, external_sender_id);`),
     ]);
 
     // Tambahkan kolom atribusi ke click_events secara aman (idempotent)
@@ -251,7 +278,7 @@ composioRouter.post('/connect', async (c) => {
 
   const body = await c.req.json().catch(() => ({}));
   const platform = String(body.platform || '').trim().toLowerCase();
-  const validPlatforms = ['youtube', 'instagram', 'tiktok', 'facebook', 'github'];
+  const validPlatforms = ['youtube', 'instagram', 'tiktok', 'facebook', 'github', 'whatsapp', 'gmail'];
 
   if (!platform || !validPlatforms.includes(platform)) {
     return c.json(
@@ -1705,6 +1732,433 @@ composioRouter.delete('/links/:id', async (c) => {
   } catch (err: any) {
     console.error('[Delete Link Error]', err.message);
     return c.json({ success: false, error: err.message || 'Gagal menghapus tautan' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// GET /api/composio/leads
+// Retrieves multi-channel inbound leads (WhatsApp, Instagram, Facebook, Gmail)
+// -------------------------------------------------------------
+composioRouter.get('/leads', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    const projectId = c.req.query('projectId');
+    const platform = c.req.query('platform'); // 'all' or specific
+    const status = c.req.query('status'); // 'all' or specific
+    const search = c.req.query('search');
+
+    let whereClauses: string[] = ['user_id = ?'];
+    let params: any[] = [user.id];
+
+    if (projectId) {
+      whereClauses.push('(project_id = ? OR project_id IS NULL)');
+      params.push(projectId);
+    }
+
+    if (platform && platform !== 'all') {
+      whereClauses.push('platform = ?');
+      params.push(platform.toLowerCase());
+    }
+
+    if (status && status !== 'all') {
+      whereClauses.push('status = ?');
+      params.push(status.toUpperCase());
+    }
+
+    if (search && search.trim()) {
+      whereClauses.push('(sender_name LIKE ? OR sender_handle LIKE ? OR last_message LIKE ?)');
+      const s = `%${search.trim()}%`;
+      params.push(s, s, s);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    // Fetch leads
+    const { results: rawLeads } = await c.env.DB.prepare(
+      `SELECT id, project_id, user_id, connection_id, platform, external_sender_id,
+              sender_name, sender_handle, last_message, thread_id, status,
+              source_attribution, unread, raw_metadata, first_contact_at,
+              last_contact_at, created_at
+       FROM inbound_leads
+       ${whereSql}
+       ORDER BY last_contact_at DESC
+       LIMIT 100;`
+    )
+      .bind(...params)
+      .all<any>();
+
+    // Fetch summary metrics for active workspace
+    let summaryWhere = 'WHERE user_id = ?';
+    let summaryParams: any[] = [user.id];
+    if (projectId) {
+      summaryWhere += ' AND (project_id = ? OR project_id IS NULL)';
+      summaryParams.push(projectId);
+    }
+
+    const { results: allSummaryRows } = await c.env.DB.prepare(
+      `SELECT platform, status, last_contact_at FROM inbound_leads ${summaryWhere};`
+    )
+      .bind(...summaryParams)
+      .all<any>();
+
+    const totalLeads = allSummaryRows.length;
+    const todayStr = new Date().toISOString().split('T')[0];
+    let newToday = 0;
+    let qualifiedCount = 0;
+
+    const byPlatform: Record<string, number> = {
+      whatsapp: 0,
+      instagram: 0,
+      facebook: 0,
+      gmail: 0,
+    };
+
+    const byStatus: Record<string, number> = {
+      NEW: 0,
+      CONTACTED: 0,
+      QUALIFIED: 0,
+      CONVERTED: 0,
+      SPAM: 0,
+    };
+
+    allSummaryRows.forEach((row: any) => {
+      const p = (row.platform || '').toLowerCase();
+      if (byPlatform[p] !== undefined) byPlatform[p]++;
+      else byPlatform[p] = 1;
+
+      const st = (row.status || 'NEW').toUpperCase();
+      if (byStatus[st] !== undefined) byStatus[st]++;
+      else byStatus[st] = 1;
+
+      if (st === 'QUALIFIED' || st === 'CONVERTED') {
+        qualifiedCount++;
+      }
+
+      if (row.last_contact_at && row.last_contact_at.startsWith(todayStr)) {
+        newToday++;
+      }
+    });
+
+    const qualifiedRate = totalLeads > 0 ? `${((qualifiedCount / totalLeads) * 100).toFixed(1)}%` : '0.0%';
+
+    const leads = (rawLeads || []).map((r: any) => {
+      let meta = {};
+      try {
+        meta = r.raw_metadata ? JSON.parse(r.raw_metadata) : {};
+      } catch {}
+
+      return {
+        id: r.id,
+        projectId: r.project_id,
+        connectionId: r.connection_id,
+        platform: r.platform,
+        externalSenderId: r.external_sender_id,
+        senderName: r.sender_name || 'Prospek Tanpa Nama',
+        senderHandle: r.sender_handle || null,
+        lastMessage: r.last_message || '',
+        threadId: r.thread_id,
+        status: r.status,
+        sourceAttribution: r.source_attribution || 'direct',
+        unread: Boolean(r.unread),
+        metadata: meta,
+        firstContactAt: formatIsoUtc(r.first_contact_at),
+        lastContactAt: formatIsoUtc(r.last_contact_at),
+        createdAt: formatIsoUtc(r.created_at),
+      };
+    });
+
+    return c.json({
+      success: true,
+      data: {
+        leads,
+        summary: {
+          totalLeads,
+          newToday,
+          qualifiedCount,
+          qualifiedRate,
+          byPlatform,
+          byStatus,
+        },
+      },
+    });
+  } catch (err: any) {
+    console.error('[Get Leads Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal memuat daftar leads' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/composio/leads/sync
+// Synchronizes inbound conversations and leads from Composio tools
+// -------------------------------------------------------------
+composioRouter.post('/leads/sync', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+    const body = await c.req.json().catch(() => ({}));
+    const projectId = String(body.projectId || c.req.query('projectId') || 'prj_default').trim();
+
+    // Check active connections for messaging platforms
+    const { results: conns } = await c.env.DB.prepare(
+      `SELECT id, platform, composio_connection_id, account_handle, user_id, project_id
+       FROM social_connections
+       WHERE user_id = ? AND status = 'ACTIVE' AND platform IN ('whatsapp', 'instagram', 'facebook', 'gmail');`
+    )
+      .bind(user.id)
+      .all<any>();
+
+    let composio = null;
+    if (c.env.COMPOSIO_API_KEY) {
+      try {
+        composio = getComposioClient(c.env.COMPOSIO_API_KEY);
+      } catch (e: any) {
+        console.warn('[Leads Sync] Composio client init notice:', e.message);
+      }
+    }
+
+    let syncedCount = 0;
+
+    if (composio && conns && conns.length > 0) {
+      for (const conn of conns) {
+        const plat = conn.platform.toLowerCase();
+        try {
+          if (plat === 'instagram') {
+            const res: any = await composio.tools.execute('INSTAGRAM_LIST_ALL_CONVERSATIONS', {
+              connectedAccountId: conn.composio_connection_id,
+              userId: conn.user_id,
+              arguments: { fields: 'id,updated_time,participants,messages' },
+            }).catch(() => null);
+
+            const convList = res?.data?.data || res?.data?.conversations || [];
+            if (Array.isArray(convList)) {
+              for (const conv of convList) {
+                const partner = conv.participants?.data?.find((p: any) => p.username !== (conn.account_handle || '').replace('@', '')) || conv.participants?.data?.[0];
+                if (partner) {
+                  const leadId = `lead_ig_${conn.id}_${partner.id || Date.now()}`;
+                  const sName = partner.name || partner.username || 'Pengguna Instagram';
+                  const sHandle = partner.username ? (partner.username.startsWith('@') ? partner.username : `@${partner.username}`) : null;
+                  const lastMsg = conv.messages?.data?.[0]?.message || 'Percakapan Instagram';
+                  const lastTime = conv.updated_time || new Date().toISOString();
+
+                  await c.env.DB.prepare(
+                    `INSERT INTO inbound_leads (
+                      id, project_id, user_id, connection_id, platform, external_sender_id,
+                      sender_name, sender_handle, last_message, thread_id, status, source_attribution,
+                      raw_metadata, first_contact_at, last_contact_at, created_at
+                    ) VALUES (?, ?, ?, ?, 'instagram', ?, ?, ?, ?, ?, 'NEW', 'bio_link', ?, ?, ?, datetime('now'))
+                    ON CONFLICT(project_id, platform, external_sender_id) DO UPDATE SET
+                      last_message = excluded.last_message,
+                      last_contact_at = excluded.last_contact_at,
+                      sender_name = COALESCE(excluded.sender_name, inbound_leads.sender_name),
+                      sender_handle = COALESCE(excluded.sender_handle, inbound_leads.sender_handle);`
+                  ).bind(
+                    leadId, projectId, user.id, conn.id, partner.id || sHandle,
+                    sName, sHandle, lastMsg, conv.id || null, JSON.stringify({ partner }),
+                    lastTime, lastTime
+                  ).run();
+                  syncedCount++;
+                }
+              }
+            }
+          } else if (plat === 'gmail') {
+            const res: any = await composio.tools.execute('GMAIL_LIST_MESSAGES', {
+              connectedAccountId: conn.composio_connection_id,
+              userId: conn.user_id,
+              arguments: { q: 'is:inbox', maxResults: 10 },
+            }).catch(() => null);
+
+            const msgList = res?.data?.messages || [];
+            if (Array.isArray(msgList) && msgList.length > 0) {
+              for (const m of msgList.slice(0, 5)) {
+                const leadId = `lead_gm_${conn.id}_${m.id}`;
+                const leadEmail = m.from || m.sender || 'lead@client.com';
+                const subject = m.subject || m.snippet || 'Pertanyaan Layanan';
+                await c.env.DB.prepare(
+                  `INSERT INTO inbound_leads (
+                    id, project_id, user_id, connection_id, platform, external_sender_id,
+                    sender_name, sender_handle, last_message, thread_id, status, source_attribution,
+                    raw_metadata, first_contact_at, last_contact_at, created_at
+                  ) VALUES (?, ?, ?, ?, 'gmail', ?, ?, ?, ?, ?, 'NEW', 'cta_button', ?, datetime('now'), datetime('now'), datetime('now'))
+                  ON CONFLICT(project_id, platform, external_sender_id) DO UPDATE SET
+                    last_message = excluded.last_message,
+                    last_contact_at = excluded.last_contact_at;`
+                ).bind(
+                  leadId, projectId, user.id, conn.id, leadEmail,
+                  leadEmail.split('@')[0], leadEmail, subject, m.threadId || m.id,
+                  JSON.stringify(m)
+                ).run();
+                syncedCount++;
+              }
+            }
+          }
+        } catch (itemErr: any) {
+          console.warn(`[Leads Sync] Notice for ${plat}:`, itemErr.message);
+        }
+      }
+    }
+
+    return c.json({
+      success: true,
+      message: syncedCount > 0 
+        ? `${syncedCount} percakapan leads berhasil disinkronisasi`
+        : 'Sinkronisasi selesai. Tidak ada pesan prospek baru.',
+      syncedCount,
+    });
+  } catch (err: any) {
+    console.error('[Leads Sync Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal menyinkronkan leads' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/composio/leads
+// Manually registers a new inbound lead (from phone, custom form, or manual entry)
+// -------------------------------------------------------------
+composioRouter.post('/leads', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+    const body = await c.req.json().catch(() => ({}));
+
+    const projectId = String(body.projectId || 'prj_default').trim();
+    const platform = String(body.platform || 'whatsapp').trim().toLowerCase();
+    const senderName = String(body.senderName || 'Calon Prospek').trim();
+    const senderHandle = String(body.senderHandle || '').trim();
+    const lastMessage = String(body.lastMessage || 'Halo, saya tertarik dengan layanan Anda.').trim();
+    const status = String(body.status || 'NEW').trim().toUpperCase();
+    const sourceAttribution = String(body.sourceAttribution || 'cta_button').trim();
+
+    const externalSenderId = senderHandle || `manual_${Date.now()}`;
+    const leadId = `lead_${platform}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+
+    await c.env.DB.prepare(
+      `INSERT INTO inbound_leads (
+        id, project_id, user_id, connection_id, platform, external_sender_id,
+        sender_name, sender_handle, last_message, thread_id, status, source_attribution,
+        unread, raw_metadata, first_contact_at, last_contact_at, created_at
+      ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, 1, '{}', datetime('now'), datetime('now'), datetime('now'))
+      ON CONFLICT(project_id, platform, external_sender_id) DO UPDATE SET
+        last_message = excluded.last_message,
+        last_contact_at = datetime('now'),
+        status = excluded.status;`
+    )
+      .bind(
+        leadId, projectId, user.id, platform, externalSenderId,
+        senderName, senderHandle, lastMessage, status, sourceAttribution
+      )
+      .run();
+
+    return c.json({
+      success: true,
+      message: 'Prospek berhasil ditambahkan',
+      leadId,
+    });
+  } catch (err: any) {
+    console.error('[Add Lead Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal menambahkan prospek' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// PATCH /api/composio/leads/:id
+// Updates lead pipeline status or marks as read
+// -------------------------------------------------------------
+composioRouter.patch('/leads/:id', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  const leadId = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    const validStatuses = ['NEW', 'CONTACTED', 'QUALIFIED', 'CONVERTED', 'SPAM'];
+    let updateSql: string[] = [];
+    let params: any[] = [];
+
+    if (body.status) {
+      const st = String(body.status).toUpperCase();
+      if (validStatuses.includes(st)) {
+        updateSql.push('status = ?');
+        params.push(st);
+      }
+    }
+
+    if (body.unread !== undefined) {
+      updateSql.push('unread = ?');
+      params.push(body.unread ? 1 : 0);
+    }
+
+    if (body.lastMessage) {
+      updateSql.push('last_message = ?');
+      params.push(String(body.lastMessage));
+    }
+
+    if (updateSql.length === 0) {
+      return c.json({ success: false, error: 'Tidak ada data pembaruan' }, 400);
+    }
+
+    params.push(leadId, user.id);
+
+    await c.env.DB.prepare(
+      `UPDATE inbound_leads SET ${updateSql.join(', ')} WHERE id = ? AND user_id = ?;`
+    )
+      .bind(...params)
+      .run();
+
+    return c.json({
+      success: true,
+      message: 'Status prospek berhasil diperbarui',
+    });
+  } catch (err: any) {
+    console.error('[Patch Lead Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal memperbarui prospek' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// DELETE /api/composio/leads/:id
+// Deletes an inbound lead
+// -------------------------------------------------------------
+composioRouter.delete('/leads/:id', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  const leadId = c.req.param('id');
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    await c.env.DB.prepare(
+      `DELETE FROM inbound_leads WHERE id = ? AND user_id = ?;`
+    ).bind(leadId, user.id).run();
+
+    return c.json({
+      success: true,
+      message: 'Prospek berhasil dihapus',
+    });
+  } catch (err: any) {
+    console.error('[Delete Lead Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal menghapus prospek' }, 500);
   }
 });
 

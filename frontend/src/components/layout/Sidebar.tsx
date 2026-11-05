@@ -12,7 +12,8 @@ import {
   ArrowUpRight,
   Menu,
   X,
-  Share2
+  Share2,
+  MessageSquare
 } from 'lucide-react';
 
 export function Sidebar() {
@@ -34,6 +35,12 @@ export function Sidebar() {
       name: 'Analitik Media Sosial',
       href: '/dashboard/social',
       icon: Share2,
+    },
+    {
+      name: 'Leads & Pesan Masuk',
+      href: '/dashboard/leads',
+      icon: MessageSquare,
+      badge: 'Baru',
     },
     {
       name: 'Manajemen & Integrasi',
@@ -118,7 +125,16 @@ export function Sidebar() {
                   <IconComponent className={`w-4 h-4 ${isActive ? 'text-white' : 'text-zinc-500'}`} />
                   <span>{item.name}</span>
                 </div>
-                {isActive && <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />}
+                <div className="flex items-center gap-1.5">
+                  {'badge' in item && item.badge && (
+                    <span className={`px-1.5 py-0.5 text-[9px] font-semibold tracking-wide rounded ${
+                      isActive ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700'
+                    }`}>
+                      {item.badge}
+                    </span>
+                  )}
+                  {isActive && <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />}
+                </div>
               </Link>
             );
           })}
