@@ -832,9 +832,16 @@ app.post('/api/track/projects', async (c) => {
 
     const body = await c.req.json().catch(() => ({}));
     const name = (body.name || '').trim();
-    const domain = (body.domain || '').trim();
 
-    if (!name || !domain) {
+    // Terima domain baik dari body.domain maupun body.allowedOrigins
+    let rawDomain = (body.domain || '').trim();
+    if (!rawDomain && Array.isArray(body.allowedOrigins) && body.allowedOrigins.length > 0) {
+      rawDomain = String(body.allowedOrigins[0] || '').trim();
+    } else if (!rawDomain && typeof body.allowedOrigins === 'string') {
+      rawDomain = body.allowedOrigins.trim();
+    }
+
+    if (!name || !rawDomain) {
       return c.json({ success: false, error: 'Nama project dan domain wajib diisi' }, 400);
     }
 
@@ -843,8 +850,19 @@ app.post('/api/track/projects', async (c) => {
     const writeKey = `pk_live_${Math.random().toString(36).substring(2, 10)}${Date.now().toString(36)}`;
 
     // Normalisasi domain input (bersihkan trailing slash, protokol, dll)
-    const normalizedDomain = extractHostname(domain) || domain.replace(/\/+$/, '');
-    const allowedOrigins = [normalizedDomain];
+    let allowedOrigins: string[] = [];
+    if (Array.isArray(body.allowedOrigins) && body.allowedOrigins.length > 0) {
+      allowedOrigins = body.allowedOrigins
+        .map((d: string) => extractHostname(d) || String(d).trim().replace(/\/+$/, ''))
+        .filter(Boolean);
+    } else {
+      const normalizedDomain = extractHostname(rawDomain) || rawDomain.replace(/\/+$/, '');
+      allowedOrigins = [normalizedDomain];
+    }
+
+    if (allowedOrigins.length === 0) {
+      allowedOrigins = [rawDomain];
+    }
 
     await c.env.DB.prepare(
       `INSERT INTO projects (id, name, public_write_key, allowed_origins, is_active, owner_id)
@@ -852,6 +870,18 @@ app.post('/api/track/projects', async (c) => {
     )
       .bind(projectId, name, writeKey, JSON.stringify(allowedOrigins), ownerId)
       .run();
+
+    // Pastikan owner terdaftar juga di project_members
+    if (ownerId) {
+      const pmId = `pm_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+      await c.env.DB.prepare(
+        `INSERT OR IGNORE INTO project_members (id, project_id, user_id, role, invited_by, created_at)
+         VALUES (?, ?, ?, 'owner', ?, datetime('now'));`
+      )
+        .bind(pmId, projectId, ownerId, ownerId)
+        .run()
+        .catch((err: any) => console.warn('[Auto Member Insert Warning]', err.message));
+    }
 
     return c.json(
       {

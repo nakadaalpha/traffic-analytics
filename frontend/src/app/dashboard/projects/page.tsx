@@ -262,6 +262,7 @@ export default function ProjectsPage() {
         credentials: "include",
         body: JSON.stringify({
           name: projectName.trim(),
+          domain: projectDomain.trim(),
           allowedOrigins: origins,
         }),
       });
