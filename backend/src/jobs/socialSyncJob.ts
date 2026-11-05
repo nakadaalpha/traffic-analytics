@@ -691,24 +691,48 @@ export async function syncSocialPostsForConnection(
               console.log(`[Social Sync] Successfully fetched ${realPosts.length} real YouTube videos from Composio!`);
             }
         } else if (platform === 'instagram') {
-          const res: any = await composioClient.tools.execute('INSTAGRAM_GET_IG_USER_MEDIA', {
-            connectedAccountId: conn.composio_connection_id,
-            userId: conn.user_id,
-            arguments: {
+          const rawItems: any[] = [];
+          let nextCursor: string | null = null;
+          let pageCount = 0;
+          const MAX_PAGES = 5; // Menjelajahi hingga 5 halaman x 100 = 500 postingan (mencakup seluruh postingan akun)
+
+          do {
+            pageCount++;
+            const args: any = {
               ig_user_id: 'me',
               limit: 100,
               fields:
                 'id,caption,media_type,media_product_type,media_url,permalink,thumbnail_url,timestamp,username,comments_count,like_count,view_count,shares_count',
-            },
-          }).catch((err: any) => {
-            console.warn('[Social Sync] Instagram user media notice:', err.message);
-            return null;
-          });
+            };
+            if (nextCursor) {
+              args.after = nextCursor;
+            }
 
-          if (res && res.data && Array.isArray(res.data.data)) {
+            const res: any = await composioClient.tools.execute('INSTAGRAM_GET_IG_USER_MEDIA', {
+              connectedAccountId: conn.composio_connection_id,
+              userId: conn.user_id,
+              arguments: args,
+            }).catch((err: any) => {
+              console.warn(`[Social Sync] Instagram page ${pageCount} notice:`, err.message);
+              return null;
+            });
+
+            if (res && res.data && Array.isArray(res.data.data) && res.data.data.length > 0) {
+              rawItems.push(...res.data.data);
+              const afterCursor = res.data.paging?.cursors?.after;
+              if (afterCursor && res.data.data.length >= 25 && afterCursor !== nextCursor) {
+                nextCursor = afterCursor;
+              } else {
+                nextCursor = null;
+              }
+            } else {
+              nextCursor = null;
+            }
+          } while (nextCursor && pageCount < MAX_PAGES);
+
+          if (rawItems.length > 0) {
             realPosts = [];
-            const rawItems = res.data.data;
-            const INSIGHT_LIMIT = Math.min(rawItems.length, 60);
+            const INSIGHT_LIMIT = Math.min(rawItems.length, 50);
 
             // Optimasi batch: Proses insight media secara paralel terkontrol (5 per batch)
             // agar puluhan postingan selesai dalam waktu < 6 detik tanpa risiko timeout Cloudflare
