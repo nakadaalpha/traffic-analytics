@@ -10,19 +10,25 @@ export interface SyncJobEnv {
  * Scheduled background worker job to sync social media metrics
  * (YouTube, Twitter/X, Instagram, etc.) via Composio v3 without blocking HTTP requests.
  */
-export async function handleSocialMediaSync(env: SyncJobEnv): Promise<void> {
+export async function handleSocialMediaSync(env: SyncJobEnv, targetConnectionId?: string): Promise<void> {
   const startTime = Date.now();
   console.log(`[Social Sync Cron] Starting background sync execution at ${new Date().toISOString()}`);
 
   try {
     await ensureSocialTables(env.DB);
 
-    // 1. Ambil seluruh akun media sosial yang aktif atau baru diinisiasi
-    const { results: connections } = await env.DB.prepare(
-      `SELECT id, user_id, platform, composio_connection_id, account_handle, status 
-       FROM social_connections 
-       WHERE status IN ('ACTIVE', 'INITIATED');`
-    ).all<any>();
+    // 1. Ambil seluruh akun media sosial yang aktif atau baru diinisiasi (bisa difokuskan per connectionId)
+    let query = `SELECT id, user_id, platform, composio_connection_id, account_handle, status 
+                 FROM social_connections 
+                 WHERE status IN ('ACTIVE', 'INITIATED')`;
+    const params: any[] = [];
+    if (targetConnectionId) {
+      query += ` AND id = ?;`;
+      params.push(targetConnectionId);
+    } else {
+      query += `;`;
+    }
+    const { results: connections } = await env.DB.prepare(query).bind(...params).all<any>();
 
     if (!connections || connections.length === 0) {
       console.log('[Social Sync Cron] No active social connections found to sync.');
@@ -212,7 +218,7 @@ export async function handleSocialMediaSync(env: SyncJobEnv): Promise<void> {
           const dbPosts = Number(postStats.total_posts || 0);
           const dbViews = Number(postStats.total_views || 0);
           if (currentVideos === 0 && dbPosts > 0) currentVideos = dbPosts;
-          if (currentViews === 0 && dbViews > 0) currentViews = dbViews;
+          if (dbViews > currentViews) currentViews = dbViews;
         }
 
         // Jika API gagal (misal terkena limit kuota) dan subscribers bernilai 0,
@@ -694,97 +700,117 @@ export async function syncSocialPostsForConnection(
 
           if (res && res.data && Array.isArray(res.data.data)) {
             realPosts = [];
-            for (let idx = 0; idx < res.data.data.length; idx++) {
-              const item = res.data.data[idx];
-              const likes = Number(item.like_count || item.total_like_count || 0);
-              const comments = Number(item.comments_count || item.total_comments_count || 0);
-              let views = Number(item.view_count || item.total_views_count || 0);
-              let shares = Number(item.shares_count || 0);
+            const rawItems = res.data.data;
+            const INSIGHT_LIMIT = Math.min(rawItems.length, 60);
 
-              // Ambil data tayangan riil (views/impressions/plays) langsung dari Meta Graph API via Composio
-              if (item.id && composioClient && conn.composio_connection_id) {
-                try {
+            // Optimasi batch: Proses insight media secara paralel terkontrol (5 per batch)
+            // agar puluhan postingan selesai dalam waktu < 6 detik tanpa risiko timeout Cloudflare
+            for (let i = 0; i < rawItems.length; i += 5) {
+              const chunk = rawItems.slice(i, i + 5);
+              const processedChunk = await Promise.all(
+                chunk.map(async (item: any, cIdx: number) => {
+                  const idx = i + cIdx;
+                  const likes = Number(item.like_count || item.total_like_count || 0);
+                  let comments = Number(item.comments_count || item.total_comments_count || 0);
+                  let views = Number(item.view_count || item.total_views_count || 0);
+                  let shares = Number(item.shares_count || 0);
+
                   const mediaType = (item.media_product_type || item.media_type || '').toUpperCase();
                   const isReelOrVideo = mediaType === 'REELS' || mediaType === 'VIDEO';
-                  const metricQuery = isReelOrVideo
-                    ? 'plays,reach,saved,total_interactions'
-                    : 'impressions,reach,saved,total_interactions';
 
-                  let insightsRes: any = await composioClient.tools.execute('INSTAGRAM_GET_IG_MEDIA_INSIGHTS', {
-                    connectedAccountId: conn.composio_connection_id,
-                    userId: conn.user_id,
-                    arguments: {
-                      ig_media_id: item.id,
-                      metric: metricQuery,
-                    },
-                  }).catch(() => null);
+                  // Ambil insight untuk postingan teratas jika composio aktif
+                  if (idx < INSIGHT_LIMIT && item.id && composioClient && conn.composio_connection_id) {
+                    try {
+                      const metricQuery = isReelOrVideo
+                        ? 'views,plays,reach,saved,total_interactions'
+                        : 'impressions,reach,saved,total_interactions';
 
-                  // Jika respons kosong/gagal, fallback ke metrik umum yang didukung Meta
-                  if (!insightsRes || !insightsRes.data || !Array.isArray(insightsRes.data.data)) {
-                    insightsRes = await composioClient.tools.execute('INSTAGRAM_GET_IG_MEDIA_INSIGHTS', {
-                      connectedAccountId: conn.composio_connection_id,
-                      userId: conn.user_id,
-                      arguments: {
-                        ig_media_id: item.id,
-                        metric: 'views,reach,total_interactions',
-                      },
-                    }).catch(() => null);
-                  }
+                      let insightsRes: any = await composioClient.tools.execute('INSTAGRAM_GET_IG_MEDIA_INSIGHTS', {
+                        connectedAccountId: conn.composio_connection_id,
+                        userId: conn.user_id,
+                        arguments: {
+                          ig_media_id: item.id,
+                          metric: metricQuery,
+                        },
+                      }).catch(() => null);
 
-                  if (insightsRes && insightsRes.data && Array.isArray(insightsRes.data.data)) {
-                    for (const m of insightsRes.data.data) {
-                      const val = Number(m.values?.[0]?.value || 0);
-                      if (m.name === 'impressions' || m.name === 'views' || m.name === 'plays') {
-                        views = val;
+                      if (!insightsRes || !insightsRes.data || !Array.isArray(insightsRes.data.data)) {
+                        insightsRes = await composioClient.tools.execute('INSTAGRAM_GET_IG_MEDIA_INSIGHTS', {
+                          connectedAccountId: conn.composio_connection_id,
+                          userId: conn.user_id,
+                          arguments: {
+                            ig_media_id: item.id,
+                            metric: 'reach,total_interactions',
+                          },
+                        }).catch(() => null);
                       }
-                      if (m.name === 'shares' && val > 0) {
-                        shares = val;
+
+                      if (insightsRes && insightsRes.data && Array.isArray(insightsRes.data.data)) {
+                        for (const m of insightsRes.data.data) {
+                          // Meta Graph API v18+ mengembalikan m.total_value.value untuk Reels, atau m.values[0].value untuk Feed
+                          const val = Number(
+                            m.total_value?.value ??
+                            m.values?.[0]?.value ??
+                            m.value ??
+                            0
+                          );
+
+                          if (val > 0) {
+                            if (m.name === 'views' || m.name === 'plays' || m.name === 'impressions') {
+                              views = val;
+                            } else if (m.name === 'reach' && views <= 0) {
+                              views = val;
+                            } else if (m.name === 'shares') {
+                              shares = val;
+                            } else if (m.name === 'comments' && comments <= 0) {
+                              comments = val;
+                            }
+                          }
+                        }
                       }
+                    } catch (insightErr: any) {
+                      console.warn('[Social Sync] Media insight fetch notice:', insightErr.message);
                     }
                   }
-                } catch (insightErr: any) {
-                  console.warn('[Social Sync] Media insight fetch notice:', insightErr.message);
-                }
-              }
 
-              // Jika API tidak mengembalikan tayangan, gunakan nilai murni tanpa estimasi perkalian
-              if (views <= 0) {
-                views = Number(item.view_count || item.total_views_count || 0);
-              }
+                  // Fallback views jika masih 0: gunakan reach atau view_count
+                  if (views <= 0) {
+                    views = Number(item.view_count || item.total_views_count || 0);
+                  }
 
-              const rate = views > 0 ? (((likes + comments) / views) * 100).toFixed(1) + '%' : '0%';
+                  const rate = views > 0 ? (((likes + comments) / views) * 100).toFixed(1) + '%' : '0%';
 
-              // Jika username tersedia dari Instagram API, update otomatis account_handle di DB
-              if (item.username) {
-                const formatted = item.username.startsWith('@') ? item.username : `@${item.username}`;
-                env.DB.prepare(`UPDATE social_connections SET account_handle = ? WHERE id = ?;`)
-                  .bind(formatted, conn.id)
-                  .run()
-                  .catch(() => null);
-                conn.account_handle = formatted;
-              }
+                  if (item.username) {
+                    const formatted = item.username.startsWith('@') ? item.username : `@${item.username}`;
+                    conn.account_handle = formatted;
+                  }
 
-              realPosts.push({
-                id: `post_ig_${conn.id}_${item.id || idx}`,
-                platform_post_id: item.id || `ig_${idx}`,
-                title_or_caption: item.caption || `Postingan Instagram ${conn.account_handle || ''}`,
-                thumbnail_url:
-                  item.media_url ||
-                  item.thumbnail_url ||
-                  null,
-                permalink:
-                  item.permalink ||
-                  `https://www.instagram.com/${(conn.account_handle || 'bbadralf_').replace('@', '')}`,
-                views_count: views,
-                likes_count: likes,
-                comments_count: comments,
-                shares_count: shares,
-                additional_metrics: {
-                  media_type: item.media_product_type || item.media_type || 'POST',
-                  engagement_rate: rate,
-                },
-                published_at: item.timestamp || new Date().toISOString(),
-              });
+                  return {
+                    id: `post_ig_${conn.id}_${item.id || idx}`,
+                    platform_post_id: item.id || `ig_${idx}`,
+                    title_or_caption: item.caption || `Postingan Instagram ${conn.account_handle || ''}`,
+                    thumbnail_url: item.media_url || item.thumbnail_url || null,
+                    permalink: item.permalink || `https://www.instagram.com/${(conn.account_handle || '').replace('@', '')}`,
+                    views_count: views,
+                    likes_count: likes,
+                    comments_count: comments,
+                    shares_count: shares,
+                    additional_metrics: {
+                      media_type: item.media_product_type || item.media_type || 'POST',
+                      engagement_rate: rate,
+                    },
+                    published_at: item.timestamp || new Date().toISOString(),
+                  };
+                })
+              );
+              realPosts.push(...processedChunk);
+            }
+
+            if (conn.account_handle) {
+              await env.DB.prepare(`UPDATE social_connections SET account_handle = ? WHERE id = ?;`)
+                .bind(conn.account_handle, conn.id)
+                .run()
+                .catch(() => null);
             }
             console.log(`[Social Sync] Successfully fetched ${realPosts.length} real Instagram posts from Composio!`);
           }

@@ -674,10 +674,13 @@ composioRouter.post('/sync', async (c) => {
   }
 
   try {
+    const body = await c.req.json().catch(() => ({}));
+    const targetConnectionId = c.req.query('connectionId') || body.connectionId;
+
     await handleSocialMediaSync({
       DB: c.env.DB,
       COMPOSIO_API_KEY: c.env.COMPOSIO_API_KEY,
-    });
+    }, targetConnectionId);
 
     return c.json({
       success: true,
@@ -877,12 +880,22 @@ composioRouter.post('/posts/sync', async (c) => {
   try {
     await ensureSocialTables(c.env.DB);
 
-    const { results: connections } = await c.env.DB.prepare(
-      `SELECT id, platform, account_handle, composio_connection_id, user_id 
-       FROM social_connections 
-       WHERE user_id = ? AND status IN ('ACTIVE', 'INITIATED');`
-    )
-      .bind(user.id)
+    const body = await c.req.json().catch(() => ({}));
+    const targetConnectionId = c.req.query('connectionId') || body.connectionId;
+
+    let query = `SELECT id, platform, account_handle, composio_connection_id, user_id 
+                 FROM social_connections 
+                 WHERE user_id = ? AND status IN ('ACTIVE', 'INITIATED')`;
+    const params: any[] = [user.id];
+    if (targetConnectionId) {
+      query += ` AND id = ?;`;
+      params.push(targetConnectionId);
+    } else {
+      query += `;`;
+    }
+
+    const { results: connections } = await c.env.DB.prepare(query)
+      .bind(...params)
       .all<any>();
 
     let composio = null;

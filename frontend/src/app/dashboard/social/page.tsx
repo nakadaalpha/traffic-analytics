@@ -990,17 +990,22 @@ export default function SocialMediaPage() {
     setIsSyncing(true);
     setNotification(null);
 
+    const activeConnId = selectedConnectionId || metricsData?.summary?.connectionId;
+    const syncPayload = activeConnId ? JSON.stringify({ connectionId: activeConnId }) : undefined;
+
     try {
       const [metricsRes, postsRes] = await Promise.all([
         fetch('/api/composio/sync', {
           method: 'POST',
-          headers: getAuthHeaders(),
+          headers: { ...getAuthHeaders(), ...(syncPayload ? { 'Content-Type': 'application/json' } : {}) },
           credentials: 'include',
+          body: syncPayload,
         }),
         fetch('/api/composio/posts/sync', {
           method: 'POST',
-          headers: getAuthHeaders(),
+          headers: { ...getAuthHeaders(), ...(syncPayload ? { 'Content-Type': 'application/json' } : {}) },
           credentials: 'include',
+          body: syncPayload,
         }),
       ]);
 
@@ -1453,7 +1458,9 @@ export default function SocialMediaPage() {
             <div className="flex items-center flex-wrap gap-2 text-xs self-start sm:self-auto">
               <div className="px-2.5 py-1 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center gap-1.5 text-zinc-600">
                 <span className="text-zinc-400">Total Konten:</span>
-                <span className="font-bold text-zinc-900 font-mono">{postsSummary.totalPosts}</span>
+                <span className="font-bold text-zinc-900 font-mono">
+                  {metricsData?.summary?.videos || postsSummary.totalPosts}
+                </span>
               </div>
               <div className="px-2.5 py-1 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center gap-1.5 text-zinc-600">
                 <span className="text-zinc-400">Total Views:</span>
