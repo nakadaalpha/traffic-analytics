@@ -29,6 +29,7 @@ import {
   Sparkles, 
   Layers, 
   ArrowUpRight,
+  ArrowRight,
   TrendingUp,
   Users,
   Eye,
@@ -574,7 +575,10 @@ export default function SocialMediaPage() {
         params.append('platform', postPlatformFilter);
       }
       if (targetConnId) {
-        params.append('connectionId', targetConnId);
+        const targetConn = connections.find((c) => c.id === targetConnId);
+        if (postPlatformFilter === 'all' || (targetConn && targetConn.platform.toLowerCase() === postPlatformFilter.toLowerCase())) {
+          params.append('connectionId', targetConnId);
+        }
       }
       params.append('sort', postSortBy);
       if (currentProject?.id) {
@@ -597,7 +601,7 @@ export default function SocialMediaPage() {
     } finally {
       setPostsLoading(false);
     }
-  }, [getAuthHeaders, postPlatformFilter, postSortBy, selectedConnectionId, currentProject?.id]);
+  }, [getAuthHeaders, postPlatformFilter, postSortBy, selectedConnectionId, connections, currentProject?.id]);
 
   // Handler: Buka modal dan muat komentar riil untuk postingan spesifik
   const openCommentsModal = useCallback(async (post: SocialPost) => {
@@ -636,7 +640,10 @@ export default function SocialMediaPage() {
         params.append('platform', postPlatformFilter);
       }
       if (selectedConnectionId) {
-        params.append('connectionId', selectedConnectionId);
+        const targetConn = connections.find((c) => c.id === selectedConnectionId);
+        if (postPlatformFilter === 'all' || (targetConn && targetConn.platform.toLowerCase() === postPlatformFilter.toLowerCase())) {
+          params.append('connectionId', selectedConnectionId);
+        }
       }
       if (currentProject?.id) {
         params.append('projectId', currentProject.id);
@@ -655,7 +662,7 @@ export default function SocialMediaPage() {
     } finally {
       setInsightsLoading(false);
     }
-  }, [getAuthHeaders, postPlatformFilter, selectedConnectionId, currentProject?.id]);
+  }, [getAuthHeaders, postPlatformFilter, selectedConnectionId, connections, currentProject?.id]);
 
   // Handler: Refresh manual analisis intelijensi AI
   const handleRefreshInsights = async () => {
@@ -1458,25 +1465,36 @@ export default function SocialMediaPage() {
             </p>
           </div>
 
-          {/* Quick Metrics KPI Pills */}
-          {postsSummary && (
-            <div className="flex items-center flex-wrap gap-2 text-xs self-start sm:self-auto">
-              <div className="px-2.5 py-1 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center gap-1.5 text-zinc-600">
-                <span className="text-zinc-400">Total Konten:</span>
-                <span className="font-bold text-zinc-900 font-mono">
-                  {metricsData?.summary?.videos || postsSummary.totalPosts}
-                </span>
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Quick Metrics KPI Pills */}
+            {postsSummary && (
+              <div className="flex items-center flex-wrap gap-2 text-xs self-start sm:self-auto">
+                <div className="px-2.5 py-1 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center gap-1.5 text-zinc-600">
+                  <span className="text-zinc-400">Total Konten:</span>
+                  <span className="font-bold text-zinc-900 font-mono">
+                    {metricsData?.summary?.videos || postsSummary.totalPosts}
+                  </span>
+                </div>
+                <div className="px-2.5 py-1 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center gap-1.5 text-zinc-600">
+                  <span className="text-zinc-400">Total Views:</span>
+                  <span className="font-bold text-sky-600 font-mono">{postsSummary.totalViews.toLocaleString('id-ID')}</span>
+                </div>
+                <div className="px-2.5 py-1 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center gap-1.5 text-zinc-600">
+                  <span className="text-zinc-400">Avg Engagement:</span>
+                  <span className="font-bold text-emerald-600 font-mono">{postsSummary.avgEngagementRate}</span>
+                </div>
               </div>
-              <div className="px-2.5 py-1 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center gap-1.5 text-zinc-600">
-                <span className="text-zinc-400">Total Views:</span>
-                <span className="font-bold text-sky-600 font-mono">{postsSummary.totalViews.toLocaleString('id-ID')}</span>
-              </div>
-              <div className="px-2.5 py-1 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center gap-1.5 text-zinc-600">
-                <span className="text-zinc-400">Avg Engagement:</span>
-                <span className="font-bold text-emerald-600 font-mono">{postsSummary.avgEngagementRate}</span>
-              </div>
-            </div>
-          )}
+            )}
+
+            <Link
+              href="/dashboard/social/posts"
+              className="px-3.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-all shadow-xs shrink-0 cursor-pointer"
+            >
+              <PlaySquare className="w-3.5 h-3.5" />
+              <span>Buka Halaman Khusus</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
         </div>
 
         {/* Toolbar: Platform Tabs & Sort Dropdown */}
@@ -1546,7 +1564,7 @@ export default function SocialMediaPage() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {posts.map((post) => {
+              {posts.slice(0, 8).map((post) => {
                 const platformObj = SUPPORTED_PLATFORMS.find((p) => p.id === post.platform);
                 return (
                   <div
@@ -1718,6 +1736,21 @@ export default function SocialMediaPage() {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {posts.length > 0 && (
+            <div className="mt-4 pt-4 border-t border-zinc-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
+              <span>
+                Menampilkan <strong className="text-zinc-800 font-mono">{Math.min(posts.length, 8)}</strong> dari <strong className="text-zinc-800 font-mono">{posts.length}</strong> konten terbaru.
+              </span>
+              <Link
+                href="/dashboard/social/posts"
+                className="font-semibold text-zinc-900 hover:text-indigo-600 inline-flex items-center gap-1.5 transition-colors group cursor-pointer"
+              >
+                <span>Lihat Seluruh Koleksi Postingan &amp; Video ({posts.length})</span>
+                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+              </Link>
             </div>
           )}
         </div>

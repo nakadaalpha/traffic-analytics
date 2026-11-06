@@ -588,6 +588,19 @@ composioRouter.get('/metrics', async (c) => {
       if (row.metric_type === 'videos_count') latestVideos = Number(row.metric_value);
     });
 
+    // Fallback defensif: Jika latestViews bernilai 0 di history, ambil akumulasi views riil dari tabel social_posts
+    if (latestViews === 0 && primaryAccount?.id) {
+      const aggRes: any = await c.env.DB.prepare(
+        `SELECT COALESCE(SUM(views_count), 0) as total_views, COUNT(*) as total_posts FROM social_posts WHERE connection_id = ?;`
+      ).bind(primaryAccount.id).first().catch(() => null);
+      if (aggRes && Number(aggRes.total_views || 0) > 0) {
+        latestViews = Number(aggRes.total_views);
+      }
+      if (latestVideos === 0 && aggRes && Number(aggRes.total_posts || 0) > 0) {
+        latestVideos = Number(aggRes.total_posts);
+      }
+    }
+
     // Format data time-series per tanggal untuk konsumsi grafik Chart.js
     const dailyMap: Record<string, { date: string; subscribers: number; views: number }> = {};
     historyRows.forEach((row: any) => {
@@ -604,6 +617,11 @@ composioRouter.get('/metrics', async (c) => {
     });
 
     const timeSeries = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+
+    // Fallback timeSeries: jika entri hari terakhir memiliki views 0 tapi latestViews > 0, selaraskan dengan latestViews
+    if (timeSeries.length > 0 && timeSeries[timeSeries.length - 1].views === 0 && latestViews > 0) {
+      timeSeries[timeSeries.length - 1].views = latestViews;
+    }
 
     // Hitung pertumbuhan subscriber/follower (growth delta) dari data riil yang terekam
     let growthDelta = 'Hari ke-1 (Mulai Pelacakan)';
@@ -778,8 +796,13 @@ composioRouter.get('/posts', async (c) => {
     }
 
     if (reqConnectionId) {
-      query += ` AND p.connection_id = ?`;
-      params.push(reqConnectionId);
+      const targetConn = connections.find((conn: any) => conn.id === reqConnectionId);
+      // Jika ada filterPlatform spesifik (misal 'youtube') tapi targetConn platformnya berbeda (misal 'instagram'),
+      // jangan kunci connection_id agar postingan platform yang dipilih tetap dapat tampil di workspace!
+      if (!filterPlatform || filterPlatform === 'all' || (targetConn && targetConn.platform?.toLowerCase() === filterPlatform.toLowerCase())) {
+        query += ` AND p.connection_id = ?`;
+        params.push(reqConnectionId);
+      }
     }
 
     if (filterPlatform && filterPlatform !== 'all') {

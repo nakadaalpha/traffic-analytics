@@ -741,7 +741,7 @@ export async function syncSocialPostsForConnection(
               const processedChunk = await Promise.all(
                 chunk.map(async (item: any, cIdx: number) => {
                   const idx = i + cIdx;
-                  const likes = Number(item.like_count || item.total_like_count || 0);
+                  let likes = Number(item.like_count || item.total_like_count || 0);
                   let comments = Number(item.comments_count || item.total_comments_count || 0);
                   let views = Number(item.view_count || item.total_views_count || 0);
                   let shares = Number(item.shares_count || 0);
@@ -763,6 +763,7 @@ export async function syncSocialPostsForConnection(
                             ig_media_id: item.id,
                             metric: 'plays,reach,saved,total_interactions',
                           },
+                          version: '20261014_00',
                         }).catch(() => null);
 
                         // Opsi 2: Fallback jika akun menggunakan Meta v21+ (views, reach, saved, total_interactions)
@@ -774,6 +775,7 @@ export async function syncSocialPostsForConnection(
                               ig_media_id: item.id,
                               metric: 'views,reach,saved,total_interactions',
                             },
+                            version: '20261014_00',
                           }).catch(() => null);
                         }
 
@@ -786,6 +788,7 @@ export async function syncSocialPostsForConnection(
                               ig_media_id: item.id,
                               metric: 'reach,total_interactions',
                             },
+                            version: '20261014_00',
                           }).catch(() => null);
                         }
                       } else {
@@ -797,6 +800,7 @@ export async function syncSocialPostsForConnection(
                             ig_media_id: item.id,
                             metric: 'impressions,reach,saved,total_interactions',
                           },
+                          version: '20261014_00',
                         }).catch(() => null);
 
                         if (!insightsRes || !insightsRes.data || !Array.isArray(insightsRes.data.data)) {
@@ -807,6 +811,7 @@ export async function syncSocialPostsForConnection(
                               ig_media_id: item.id,
                               metric: 'reach,total_interactions',
                             },
+                            version: '20261014_00',
                           }).catch(() => null);
                         }
                       }
@@ -842,6 +847,20 @@ export async function syncSocialPostsForConnection(
                   // Fallback views jika masih 0: gunakan reach atau view_count atau plays_count
                   if (views <= 0) {
                     views = Number(item.view_count || item.total_views_count || item.plays_count || 0);
+                  }
+
+                  // Universal Baseline State Retention: Lindungi dari nilai 0 saat API gagal/limit
+                  const prevPost = existingPostsMap.get(item.id) || existingPostsMap.get(`post_ig_${conn.id}_${item.id}`);
+                  if (prevPost) {
+                    if (views <= 0 && Number(prevPost.views_count || 0) > 0) {
+                      views = Number(prevPost.views_count);
+                    }
+                    if (likes <= 0 && Number(prevPost.likes_count || 0) > 0) {
+                      likes = Number(prevPost.likes_count);
+                    }
+                    if (comments <= 0 && Number(prevPost.comments_count || 0) > 0) {
+                      comments = Number(prevPost.comments_count);
+                    }
                   }
 
                   const rate = views > 0 ? (((likes + comments) / views) * 100).toFixed(1) + '%' : '0%';

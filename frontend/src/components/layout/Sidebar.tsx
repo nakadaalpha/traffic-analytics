@@ -13,7 +13,8 @@ import {
   Menu,
   X,
   Share2,
-  MessageSquare
+  MessageSquare,
+  PlaySquare
 } from 'lucide-react';
 
 export function Sidebar() {
@@ -35,6 +36,11 @@ export function Sidebar() {
       name: 'Analitik Media Sosial',
       href: '/dashboard/social',
       icon: Share2,
+    },
+    {
+      name: 'Konten & Postingan',
+      href: '/dashboard/social/posts',
+      icon: PlaySquare,
     },
     {
       name: 'Leads & Pesan Masuk',
