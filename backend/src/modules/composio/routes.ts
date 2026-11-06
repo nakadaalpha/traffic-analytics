@@ -1959,6 +1959,7 @@ composioRouter.post('/leads/sync', async (c) => {
     }
 
     let syncedCount = 0;
+    const syncWarnings: string[] = [];
 
     if (composio && conns && conns.length > 0) {
       for (const conn of conns) {
@@ -1975,6 +1976,17 @@ composioRouter.post('/leads/sync', async (c) => {
               console.warn('[Leads Sync] Instagram execution notice:', err.message);
               return null;
             });
+
+            if (res?.successful === false || res?.data?.status_code === 403 || res?.data?.http_error) {
+              const errMsg = String(res?.data?.message || res?.error || '');
+              if (errMsg.includes('does not have permission') || errMsg.includes('code":10') || res?.data?.status_code === 403) {
+                syncWarnings.push(
+                  `Akun ${conn.account_handle || 'Instagram'} ditolak oleh Meta API (Error 403: Belum memiliki izin akses pesan). Pastikan akun berstatus Profesional (Creator/Bisnis), aktifkan toggle 'Izinkan akses ke pesan' di menu Pengaturan Instagram HP, lalu hubungkan ulang akun.`
+                );
+              } else {
+                syncWarnings.push(`Akun ${conn.account_handle || conn.platform}: ${errMsg || 'Gagal memuat pesan'}`);
+              }
+            }
 
             const convList = res?.data?.data || res?.data?.conversations || [];
             if (Array.isArray(convList)) {
@@ -2050,11 +2062,22 @@ composioRouter.post('/leads/sync', async (c) => {
       }
     }
 
+    let responseMessage = '';
+    if (syncedCount > 0) {
+      responseMessage = `${syncedCount} percakapan leads berhasil disinkronisasi.`;
+      if (syncWarnings.length > 0) {
+        responseMessage += ` (${syncWarnings.join('; ')})`;
+      }
+    } else if (syncWarnings.length > 0) {
+      responseMessage = syncWarnings.join('; ');
+    } else {
+      responseMessage = 'Sinkronisasi selesai. Tidak ada pesan prospek baru.';
+    }
+
     return c.json({
-      success: true,
-      message: syncedCount > 0 
-        ? `${syncedCount} percakapan leads berhasil disinkronisasi`
-        : 'Sinkronisasi selesai. Tidak ada pesan prospek baru.',
+      success: syncWarnings.length === 0 || syncedCount > 0,
+      message: responseMessage,
+      warnings: syncWarnings.length > 0 ? syncWarnings : undefined,
       syncedCount,
     });
   } catch (err: any) {
