@@ -247,8 +247,8 @@ export default function LeadsPage() {
 
       if (data.success && data.data) {
         setLeads(data.data.leads || []);
-        if (data.data.stats) {
-          setStats(data.data.stats);
+        if (data.data.stats || data.data.summary) {
+          setStats(data.data.stats || data.data.summary);
         }
       }
     } catch (err: any) {

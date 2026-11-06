@@ -1909,6 +1909,14 @@ composioRouter.get('/leads', async (c) => {
           byPlatform,
           byStatus,
         },
+        stats: {
+          totalLeads,
+          newToday,
+          qualifiedCount,
+          qualifiedRate,
+          byPlatform,
+          byStatus,
+        },
       },
     });
   } catch (err: any) {
@@ -1955,24 +1963,35 @@ composioRouter.post('/leads/sync', async (c) => {
     if (composio && conns && conns.length > 0) {
       for (const conn of conns) {
         const plat = conn.platform.toLowerCase();
+        const effectiveProjectId = (projectId && projectId !== 'prj_default') ? projectId : (conn.project_id || projectId || 'prj_default');
         try {
           if (plat === 'instagram') {
             const res: any = await composio.tools.execute('INSTAGRAM_LIST_ALL_CONVERSATIONS', {
               connectedAccountId: conn.composio_connection_id,
               userId: conn.user_id,
-              arguments: { fields: 'id,updated_time,participants,messages' },
-            }).catch(() => null);
+              arguments: { fields: 'id,updated_time,participants,messages{id,created_time,from,message}' },
+              version: '20261014_00',
+            }).catch((err: any) => {
+              console.warn('[Leads Sync] Instagram execution notice:', err.message);
+              return null;
+            });
 
             const convList = res?.data?.data || res?.data?.conversations || [];
             if (Array.isArray(convList)) {
               for (const conv of convList) {
-                const partner = conv.participants?.data?.find((p: any) => p.username !== (conn.account_handle || '').replace('@', '')) || conv.participants?.data?.[0];
+                const myHandle = (conn.account_handle || '').replace('@', '').toLowerCase();
+                const partner = conv.participants?.data?.find((p: any) => (p.username || '').toLowerCase() !== myHandle) || conv.participants?.data?.[0];
                 if (partner) {
                   const leadId = `lead_ig_${conn.id}_${partner.id || Date.now()}`;
-                  const sName = partner.name || partner.username || 'Pengguna Instagram';
+                  const sName = partner.name || (partner.username ? `@${partner.username}` : 'Pengguna Instagram');
                   const sHandle = partner.username ? (partner.username.startsWith('@') ? partner.username : `@${partner.username}`) : null;
-                  const lastMsg = conv.messages?.data?.[0]?.message || 'Percakapan Instagram';
-                  const lastTime = conv.updated_time || new Date().toISOString();
+                  
+                  // Cari pesan terakhir dari pengirim atau pesan percakapan
+                  const msgs = conv.messages?.data || [];
+                  const partnerMsg = msgs.find((m: any) => (m.from?.username || '').toLowerCase() === (partner.username || '').toLowerCase() && m.message?.trim());
+                  const anyMsg = msgs.find((m: any) => m.message?.trim());
+                  const lastMsg = partnerMsg?.message?.trim() || anyMsg?.message?.trim() || `Percakapan DM Instagram dari @${partner.username || 'prospek'}`;
+                  const lastTime = conv.updated_time ? formatIsoUtc(conv.updated_time) : new Date().toISOString();
 
                   await c.env.DB.prepare(
                     `INSERT INTO inbound_leads (
@@ -1986,7 +2005,7 @@ composioRouter.post('/leads/sync', async (c) => {
                       sender_name = COALESCE(excluded.sender_name, inbound_leads.sender_name),
                       sender_handle = COALESCE(excluded.sender_handle, inbound_leads.sender_handle);`
                   ).bind(
-                    leadId, projectId, user.id, conn.id, partner.id || sHandle,
+                    leadId, effectiveProjectId, user.id, conn.id, partner.id || sHandle,
                     sName, sHandle, lastMsg, conv.id || null, JSON.stringify({ partner }),
                     lastTime, lastTime
                   ).run();
