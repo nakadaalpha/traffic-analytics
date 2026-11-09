@@ -2153,6 +2153,94 @@ app.post('/api/track/click', async (c) => {
   return c.body(null, 204);
 });
 
+// -------------------------------------------------------------
+// POST /api/track/leads (Public Ingestion Webhook for Website Forms)
+// -------------------------------------------------------------
+app.post('/api/track/leads', async (c) => {
+  try {
+    let body: any = {};
+    const contentType = c.req.header('content-type') || '';
+    if (contentType.includes('application/json')) {
+      body = await c.req.json().catch(() => ({}));
+    } else {
+      const form = await c.req.parseBody().catch(() => ({}));
+      body = form || {};
+    }
+
+    const projectId =
+      c.req.header('x-project-id') || body.projectId || body.project_id || 'prj_default';
+    const writeKey = c.req.header('x-write-key') || body.writeKey || body.write_key;
+
+    // Resolve owner / user of project
+    let userId: string = 'usr_default';
+    const project: any = await c.env.DB.prepare(
+      `SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1;`
+    )
+      .bind(projectId)
+      .first();
+
+    if (project && project.owner_id) {
+      userId = project.owner_id;
+    } else {
+      const firstUser: any = await c.env.DB.prepare(
+        `SELECT id FROM users ORDER BY created_at ASC LIMIT 1;`
+      ).first();
+      if (firstUser && firstUser.id) {
+        userId = firstUser.id;
+      }
+    }
+
+    const name = String(body.name || body.senderName || body.fullName || 'Prospek Web').trim();
+    const email = String(body.email || body.senderEmail || '').trim();
+    const phone = String(body.phone || body.phoneNumber || body.whatsapp || '').trim();
+    const handle = phone || email || `@web_${Date.now().toString(36)}`;
+    const externalSenderId = phone || email || `form_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+    const message = String(body.message || body.lastMessage || body.notes || 'Inquiry formulir website').trim();
+    const source = String(body.source || body.sourceAttribution || 'website_form').trim();
+    const dealValue = Number(body.dealValue || body.value) || 0;
+    const leadId = `lead_website_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+
+    await c.env.DB.prepare(
+      `INSERT INTO inbound_leads (
+        id, project_id, user_id, connection_id, platform, external_sender_id,
+        sender_name, sender_handle, last_message, thread_id, status, source_attribution,
+        deal_value, next_follow_up_at, notes, unread, raw_metadata, first_contact_at, last_contact_at, created_at
+      ) VALUES (?, ?, ?, NULL, 'website', ?, ?, ?, ?, NULL, 'NEW', ?, ?, NULL, NULL, 1, ?, datetime('now'), datetime('now'), datetime('now'))
+      ON CONFLICT(project_id, platform, external_sender_id) DO UPDATE SET
+        last_message = excluded.last_message,
+        last_contact_at = datetime('now'),
+        sender_name = excluded.sender_name,
+        deal_value = CASE WHEN excluded.deal_value > 0 THEN excluded.deal_value ELSE inbound_leads.deal_value END,
+        unread = 1;`
+    )
+      .bind(
+        leadId,
+        project ? project.id : projectId,
+        userId,
+        externalSenderId,
+        name,
+        handle,
+        message,
+        source,
+        dealValue,
+        JSON.stringify({ ip: c.req.header('cf-connecting-ip') || '127.0.0.1', ...body })
+      )
+      .run();
+
+    return c.json(
+      {
+        success: true,
+        message: 'Prospek formulir berhasil dicatat.',
+        leadId,
+      },
+      201
+    );
+  } catch (err: any) {
+    console.error('[Public Lead Ingestion Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal menyimpan prospek' }, 500);
+  }
+});
+
 // Export Edge Worker Handlers (HTTP Router + Cloudflare Cron Trigger)
 export default {
   fetch: app.fetch,

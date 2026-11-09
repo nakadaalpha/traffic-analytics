@@ -212,14 +212,17 @@ CREATE TABLE IF NOT EXISTS inbound_leads (
     project_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
     connection_id TEXT,
-    platform TEXT NOT NULL, -- 'whatsapp', 'instagram', 'facebook', 'gmail'
+    platform TEXT NOT NULL, -- 'whatsapp', 'instagram', 'facebook', 'gmail', 'website'
     external_sender_id TEXT NOT NULL,
     sender_name TEXT,
     sender_handle TEXT,
     last_message TEXT,
     thread_id TEXT,
-    status TEXT NOT NULL DEFAULT 'NEW', -- 'NEW', 'CONTACTED', 'QUALIFIED', 'CONVERTED', 'SPAM'
+    status TEXT NOT NULL DEFAULT 'NEW', -- 'NEW', 'CONTACTED', 'QUALIFIED', 'NEGOTIATION', 'CONVERTED', 'LOST', 'SPAM'
     source_attribution TEXT,
+    deal_value REAL DEFAULT 0,
+    next_follow_up_at TEXT,
+    notes TEXT,
     unread INTEGER NOT NULL DEFAULT 1,
     raw_metadata TEXT,
     first_contact_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -232,6 +235,7 @@ CREATE TABLE IF NOT EXISTS inbound_leads (
 CREATE INDEX IF NOT EXISTS idx_leads_project_time ON inbound_leads (project_id, last_contact_at DESC);
 CREATE INDEX IF NOT EXISTS idx_leads_platform ON inbound_leads (project_id, platform);
 CREATE INDEX IF NOT EXISTS idx_leads_status ON inbound_leads (project_id, status);
+CREATE INDEX IF NOT EXISTS idx_leads_follow_up ON inbound_leads (project_id, next_follow_up_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_dedupe ON inbound_leads (project_id, platform, external_sender_id);
 
 

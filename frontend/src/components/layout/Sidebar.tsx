@@ -20,6 +20,30 @@ import {
 export function Sidebar() {
   const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
+  const [leadsBadge, setLeadsBadge] = useState<{ text: string; isAlert: boolean }>({
+    text: 'Baru',
+    isAlert: false,
+  });
+
+  // Dynamic counter badge for due-today follow-ups or new inbound leads
+  React.useEffect(() => {
+    fetch('/api/composio/leads?limit=1')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.success && data?.data?.summary) {
+          const due = data.data.summary.followUpDueToday || 0;
+          const newToday = data.data.summary.newToday || 0;
+          if (due > 0) {
+            setLeadsBadge({ text: `${due} Tugas`, isAlert: true });
+          } else if (newToday > 0) {
+            setLeadsBadge({ text: `${newToday} Baru`, isAlert: false });
+          } else {
+            setLeadsBadge({ text: 'Baru', isAlert: false });
+          }
+        }
+      })
+      .catch(() => {});
+  }, [pathname]);
 
   const navigation = [
     {
@@ -46,7 +70,8 @@ export function Sidebar() {
       name: 'Leads & Pesan Masuk',
       href: '/dashboard/leads',
       icon: MessageSquare,
-      badge: 'Baru',
+      badge: leadsBadge.text,
+      isAlert: leadsBadge.isAlert,
     },
     {
       name: 'Manajemen & Integrasi',
@@ -134,7 +159,11 @@ export function Sidebar() {
                 <div className="flex items-center gap-1.5">
                   {'badge' in item && item.badge && (
                     <span className={`px-1.5 py-0.5 text-[9px] font-semibold tracking-wide rounded ${
-                      isActive ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700'
+                      isActive
+                        ? 'bg-white/20 text-white'
+                        : (item as any).isAlert
+                        ? 'bg-amber-100 text-amber-800 font-bold border border-amber-200'
+                        : 'bg-blue-100 text-blue-700'
                     }`}>
                       {item.badge}
                     </span>

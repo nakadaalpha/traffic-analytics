@@ -26,11 +26,50 @@ import {
   Check,
   Send,
   HelpCircle,
+  LayoutGrid,
+  List,
+  Calendar,
+  DollarSign,
+  Globe,
+  ArrowRight,
+  FileText,
+  ChevronRight,
+  Inbox,
+  Tag,
+  GripVertical,
 } from 'lucide-react';
 import { useProject } from '@/context/ProjectContext';
 
-type LeadPlatform = 'whatsapp' | 'instagram' | 'facebook' | 'gmail';
-type LeadStatus = 'NEW' | 'CONTACTED' | 'QUALIFIED' | 'CONVERTED' | 'SPAM';
+// Helper format angka rupiah dengan pemisah ribuan
+const formatRupiahDisplay = (val: string | number | undefined) => {
+  if (val === undefined || val === null || val === '') return '';
+  const clean = String(val).replace(/\D/g, '');
+  if (!clean) return '';
+  return new Intl.NumberFormat('id-ID').format(Number(clean));
+};
+
+const parseRupiahRaw = (val: string) => {
+  return val.replace(/\D/g, '');
+};
+
+const QUICK_NOTE_CHIPS = [
+  'Telepon Tidak Diangkat',
+  'Minta Proposal via WA',
+  'Janji Telepon Ulang',
+  'Tertarik Paket Promo',
+  'Harga Belum Cocok',
+  'Menunggu Keputusan Direksi',
+];
+
+type LeadPlatform = 'whatsapp' | 'instagram' | 'facebook' | 'gmail' | 'website';
+type LeadStatus = 'NEW' | 'CONTACTED' | 'QUALIFIED' | 'NEGOTIATION' | 'CONVERTED' | 'LOST' | 'SPAM';
+
+export interface LeadNote {
+  id: string;
+  author: string;
+  text: string;
+  createdAt: string;
+}
 
 interface InboundLead {
   id: string;
@@ -44,6 +83,9 @@ interface InboundLead {
   lastMessage: string | null;
   threadId: string | null;
   status: LeadStatus;
+  dealValue?: number;
+  nextFollowUpAt?: string | null;
+  notes?: string | null;
   sourceAttribution: string | null;
   unread: boolean;
   firstContactAt: string;
@@ -54,10 +96,21 @@ interface InboundLead {
 interface LeadStats {
   totalLeads: number;
   newToday: number;
+  followUpDueToday?: number;
+  totalRevenue?: number;
   qualifiedRate: string;
   byPlatform: Record<string, number>;
   byStatus: Record<string, number>;
 }
+
+const KANBAN_STAGES: { status: LeadStatus; label: string; desc: string }[] = [
+  { status: 'NEW', label: 'Baru', desc: 'Pesan masuk belum direspons' },
+  { status: 'CONTACTED', label: 'Dihubungi', desc: 'Sudah dihubungi / chat aktif' },
+  { status: 'QUALIFIED', label: 'Kualifikasi', desc: 'Minat tinggi & sesuai target' },
+  { status: 'NEGOTIATION', label: 'Negosiasi', desc: 'Tahap penawaran harga' },
+  { status: 'CONVERTED', label: 'Deal / Won', desc: 'Closing berhasil' },
+  { status: 'LOST', label: 'Lost / Batal', desc: 'Tidak berminat / batal' },
+];
 
 function parseUtcDate(dateStr: string | null | undefined): Date | null {
   if (!dateStr) return null;
@@ -69,6 +122,62 @@ function parseUtcDate(dateStr: string | null | undefined): Date | null {
 function formatLocalDateTime(dateStr: string | null | undefined): string {
   const d = parseUtcDate(dateStr);
   return d ? d.toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' }) : '-';
+}
+
+function getInitials(name: string | null | undefined): string {
+  if (!name) return '?';
+  const clean = name.replace('@', '').trim();
+  const parts = clean.split(/[\s._-]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return clean.slice(0, 2).toUpperCase() || '?';
+}
+
+function getAvatarColor(str: string): string {
+  const colors = [
+    'bg-blue-100 text-blue-700 border-blue-200',
+    'bg-purple-100 text-purple-700 border-purple-200',
+    'bg-amber-100 text-amber-700 border-amber-200',
+    'bg-emerald-100 text-emerald-700 border-emerald-200',
+    'bg-pink-100 text-pink-700 border-pink-200',
+    'bg-indigo-100 text-indigo-700 border-indigo-200',
+    'bg-teal-100 text-teal-700 border-teal-200',
+    'bg-orange-100 text-orange-700 border-orange-200',
+  ];
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
+}
+
+function formatRelativeTime(dateStr: string | null | undefined): string {
+  const d = parseUtcDate(dateStr);
+  if (!d) return '-';
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffMins = Math.floor(diffMs / (60 * 1000));
+  const diffHours = Math.floor(diffMs / (60 * 60 * 1000));
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+
+  if (diffMins < 1) return 'Baru saja';
+  if (diffMins < 60) return `${diffMins}m lalu`;
+  if (diffHours < 24) return `${diffHours}j lalu`;
+  if (diffDays === 1) return 'Kemarin';
+  if (diffDays < 7) return `${diffDays}h lalu`;
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+}
+
+function getNoteCount(notesJson: string | null | undefined): number {
+  if (!notesJson) return 0;
+  try {
+    const parsed = JSON.parse(notesJson);
+    if (Array.isArray(parsed)) return parsed.length;
+    return 1;
+  } catch {
+    return notesJson.trim() ? 1 : 0;
+  }
 }
 
 function getPlatformMeta(platform: string) {
@@ -121,6 +230,14 @@ function getPlatformMeta(platform: string) {
           </svg>
         ),
       };
+    case 'website':
+      return {
+        name: 'Formulir Web',
+        badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+        dotColor: 'bg-indigo-500',
+        textColor: 'text-indigo-600',
+        icon: <Globe className="w-4 h-4 text-indigo-600" />,
+      };
     default:
       return {
         name: platform,
@@ -139,36 +256,72 @@ function getStatusMeta(status: LeadStatus) {
         label: 'Baru',
         badgeClass: 'bg-blue-50 text-blue-700 border-blue-200',
         dotClass: 'bg-blue-500',
+        accentBorder: 'border-t-blue-500',
+        pillClass: 'bg-blue-100 text-blue-800',
+        dropZoneClass: 'border-2 border-dashed border-blue-400 bg-blue-50/30 ring-2 ring-blue-300/30 ring-inset',
       };
     case 'CONTACTED':
       return {
         label: 'Dihubungi',
         badgeClass: 'bg-amber-50 text-amber-700 border-amber-200',
         dotClass: 'bg-amber-500',
+        accentBorder: 'border-t-amber-500',
+        pillClass: 'bg-amber-100 text-amber-800',
+        dropZoneClass: 'border-2 border-dashed border-amber-400 bg-amber-50/30 ring-2 ring-amber-300/30 ring-inset',
       };
     case 'QUALIFIED':
       return {
-        label: 'Terkualifikasi',
+        label: 'Kualifikasi',
         badgeClass: 'bg-purple-50 text-purple-700 border-purple-200',
         dotClass: 'bg-purple-500',
+        accentBorder: 'border-t-purple-500',
+        pillClass: 'bg-purple-100 text-purple-800',
+        dropZoneClass: 'border-2 border-dashed border-purple-400 bg-purple-50/30 ring-2 ring-purple-300/30 ring-inset',
+      };
+    case 'NEGOTIATION':
+      return {
+        label: 'Negosiasi',
+        badgeClass: 'bg-orange-50 text-orange-700 border-orange-200',
+        dotClass: 'bg-orange-500',
+        accentBorder: 'border-t-orange-500',
+        pillClass: 'bg-orange-100 text-orange-800',
+        dropZoneClass: 'border-2 border-dashed border-orange-400 bg-orange-50/30 ring-2 ring-orange-300/30 ring-inset',
       };
     case 'CONVERTED':
       return {
-        label: 'Terkonversi',
+        label: 'Deal / Won',
         badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
         dotClass: 'bg-emerald-500',
+        accentBorder: 'border-t-emerald-500',
+        pillClass: 'bg-emerald-100 text-emerald-800',
+        dropZoneClass: 'border-2 border-dashed border-emerald-400 bg-emerald-50/30 ring-2 ring-emerald-300/30 ring-inset',
+      };
+    case 'LOST':
+      return {
+        label: 'Lost / Batal',
+        badgeClass: 'bg-rose-50 text-rose-700 border-rose-200',
+        dotClass: 'bg-rose-500',
+        accentBorder: 'border-t-rose-500',
+        pillClass: 'bg-rose-100 text-rose-800',
+        dropZoneClass: 'border-2 border-dashed border-rose-400 bg-rose-50/30 ring-2 ring-rose-300/30 ring-inset',
       };
     case 'SPAM':
       return {
         label: 'Spam',
         badgeClass: 'bg-zinc-100 text-zinc-600 border-zinc-300',
         dotClass: 'bg-zinc-400',
+        accentBorder: 'border-t-zinc-400',
+        pillClass: 'bg-zinc-200 text-zinc-700',
+        dropZoneClass: 'border-2 border-dashed border-zinc-400 bg-zinc-100/40 ring-2 ring-zinc-300/30 ring-inset',
       };
     default:
       return {
         label: status,
         badgeClass: 'bg-zinc-100 text-zinc-700 border-zinc-200',
         dotClass: 'bg-zinc-400',
+        accentBorder: 'border-t-zinc-400',
+        pillClass: 'bg-zinc-200 text-zinc-700',
+        dropZoneClass: 'border-2 border-dashed border-zinc-400 bg-zinc-100/40 ring-2 ring-zinc-300/30 ring-inset',
       };
   }
 }
@@ -177,7 +330,8 @@ function getChatLink(lead: InboundLead): string {
   switch (lead.platform) {
     case 'whatsapp': {
       const cleanPhone = lead.externalSenderId.replace(/[^0-9]/g, '');
-      return `https://wa.me/${cleanPhone}`;
+      const greeting = `Halo Kak ${lead.senderName || ''}, terima kasih telah menghubungi kami. Terkait inquiry Anda "${(lead.lastMessage || '').slice(0, 45)}...", ada yang bisa kami bantu?`;
+      return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(greeting.trim())}`;
     }
     case 'instagram': {
       const handle = (lead.senderHandle || lead.externalSenderId || '').replace('@', '');
@@ -188,7 +342,18 @@ function getChatLink(lead: InboundLead): string {
     }
     case 'gmail': {
       const email = lead.senderHandle || lead.externalSenderId;
-      return `mailto:${email}`;
+      const subject = encodeURIComponent(`Tindak Lanjut Firenalytics - Halo ${lead.senderName || ''}`);
+      return `mailto:${email}?subject=${subject}`;
+    }
+    case 'website': {
+      if (lead.senderHandle && lead.senderHandle.includes('@')) {
+        return `mailto:${lead.senderHandle}`;
+      }
+      const cleanPhone = (lead.senderHandle || lead.externalSenderId).replace(/[^0-9]/g, '');
+      if (cleanPhone.length >= 8) {
+        return `https://wa.me/${cleanPhone}`;
+      }
+      return '#';
     }
     default:
       return '#';
@@ -202,6 +367,8 @@ export default function LeadsPage() {
   const [stats, setStats] = useState<LeadStats>({
     totalLeads: 0,
     newToday: 0,
+    followUpDueToday: 0,
+    totalRevenue: 0,
     qualifiedRate: '0.0%',
     byPlatform: {},
     byStatus: {},
@@ -213,6 +380,21 @@ export default function LeadsPage() {
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [selectedLead, setSelectedLead] = useState<InboundLead | null>(null);
 
+  // View Switcher (Kanban vs Table) & Follow-up Filter
+  const [viewMode, setViewMode] = useState<'kanban' | 'table'>('kanban');
+  const [filterDueToday, setFilterDueToday] = useState(false);
+
+  // Kanban Drag and Drop Pipeline State
+  const [draggedLeadId, setDraggedLeadId] = useState<string | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<LeadStatus | null>(null);
+
+  // CRM Detail Modal State (Notes & Deal Value & Follow-Up)
+  const [editDealValue, setEditDealValue] = useState<string>('');
+  const [editFollowUpDate, setEditFollowUpDate] = useState<string>('');
+  const [isSavingDetails, setIsSavingDetails] = useState(false);
+  const [newNoteText, setNewNoteText] = useState('');
+  const [submittingNote, setSubmittingNote] = useState(false);
+
   // Modal State Tambah Lead Manual
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [addPlatform, setAddPlatform] = useState<LeadPlatform>('whatsapp');
@@ -221,6 +403,9 @@ export default function LeadsPage() {
   const [addSenderHandle, setAddSenderHandle] = useState('');
   const [addMessage, setAddMessage] = useState('');
   const [addStatus, setAddStatus] = useState<LeadStatus>('NEW');
+  const [addDealValue, setAddDealValue] = useState('');
+  const [addFollowUpDate, setAddFollowUpDate] = useState('');
+  const [addNotes, setAddNotes] = useState('');
   const [addAttribution, setAddAttribution] = useState('');
   const [submittingAdd, setSubmittingAdd] = useState(false);
 
@@ -231,6 +416,19 @@ export default function LeadsPage() {
     setNotification({ type, message });
     setTimeout(() => setNotification(null), 4500);
   }, []);
+
+  // Sync selected lead CRM form fields
+  useEffect(() => {
+    if (selectedLead) {
+      setEditDealValue(selectedLead.dealValue ? String(selectedLead.dealValue) : '');
+      setEditFollowUpDate(
+        selectedLead.nextFollowUpAt
+          ? new Date(selectedLead.nextFollowUpAt).toISOString().slice(0, 16)
+          : ''
+      );
+      setNewNoteText('');
+    }
+  }, [selectedLead?.id]);
 
   // Fetch Leads
   const fetchLeads = useCallback(async () => {
@@ -380,6 +578,9 @@ export default function LeadsPage() {
           senderHandle: addSenderHandle.trim() || undefined,
           lastMessage: addMessage.trim() || undefined,
           status: addStatus,
+          dealValue: Number(addDealValue) || 0,
+          nextFollowUpAt: addFollowUpDate ? new Date(addFollowUpDate).toISOString() : undefined,
+          notes: addNotes.trim() || undefined,
           sourceAttribution: addAttribution.trim() || 'Manual Input',
         }),
       });
@@ -394,6 +595,9 @@ export default function LeadsPage() {
         setAddSenderHandle('');
         setAddMessage('');
         setAddStatus('NEW');
+        setAddDealValue('');
+        setAddFollowUpDate('');
+        setAddNotes('');
         setAddAttribution('');
         await fetchLeads();
       } else {
@@ -405,6 +609,97 @@ export default function LeadsPage() {
       setSubmittingAdd(false);
     }
   };
+
+  // Append Internal Sales Note to Lead
+  const handleAddNote = async (leadId: string) => {
+    if (!newNoteText.trim()) return;
+    try {
+      setSubmittingNote(true);
+      const res = await fetch(`/api/composio/leads/${leadId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appendNote: newNoteText.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        showNotification('success', 'Catatan aktivitas penjualan berhasil disimpan');
+        const textSaved = newNoteText.trim();
+        setNewNoteText('');
+        await fetchLeads();
+        // Optimistic update on selectedLead
+        setSelectedLead((prev) => {
+          if (!prev) return null;
+          let parsed: LeadNote[] = [];
+          try {
+            if (prev.notes) parsed = JSON.parse(prev.notes);
+            if (!Array.isArray(parsed)) parsed = [];
+          } catch {
+            parsed = [];
+          }
+          parsed.unshift({
+            id: `note_${Date.now()}`,
+            author: 'Saya',
+            text: textSaved,
+            createdAt: new Date().toISOString(),
+          });
+          return { ...prev, notes: JSON.stringify(parsed) };
+        });
+      } else {
+        showNotification('error', data.error || 'Gagal menyimpan catatan');
+      }
+    } catch {
+      showNotification('error', 'Gangguan saat menghubungi server');
+    } finally {
+      setSubmittingNote(false);
+    }
+  };
+
+  // Save Deal Value & Follow-Up Date in Detail Modal
+  const handleSaveLeadCrmDetails = async (leadId: string) => {
+    try {
+      setIsSavingDetails(true);
+      const res = await fetch(`/api/composio/leads/${leadId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dealValue: Number(editDealValue) || 0,
+          nextFollowUpAt: editFollowUpDate ? new Date(editFollowUpDate).toISOString() : null,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.success) {
+        showNotification('success', 'Rincian CRM prospek berhasil disimpan');
+        await fetchLeads();
+        setSelectedLead((prev) =>
+          prev
+            ? {
+                ...prev,
+                dealValue: Number(editDealValue) || 0,
+                nextFollowUpAt: editFollowUpDate ? new Date(editFollowUpDate).toISOString() : null,
+              }
+            : null
+        );
+      } else {
+        showNotification('error', data.error || 'Gagal menyimpan pembaruan');
+      }
+    } catch {
+      showNotification('error', 'Gangguan saat menghubungi server');
+    } finally {
+      setIsSavingDetails(false);
+    }
+  };
+
+  // Filtered Leads by Due Today or Normal
+  const filteredLeads = useMemo(() => {
+    if (!filterDueToday) return leads;
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+    return leads.filter((l) => {
+      if (!l.nextFollowUpAt) return false;
+      if (['CONVERTED', 'LOST', 'SPAM'].includes(l.status)) return false;
+      return new Date(l.nextFollowUpAt) <= endOfToday;
+    });
+  }, [leads, filterDueToday]);
 
   // Export to CSV
   const handleExportCsv = () => {
@@ -491,6 +786,34 @@ export default function LeadsPage() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* View Mode Segmented Switcher */}
+          <div className="flex items-center p-0.5 rounded-lg border border-zinc-200 bg-zinc-100 text-xs shadow-xs">
+            <button
+              type="button"
+              onClick={() => setViewMode('kanban')}
+              className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 transition-colors ${
+                viewMode === 'kanban'
+                  ? 'bg-white text-zinc-900 shadow-xs'
+                  : 'text-zinc-600 hover:text-zinc-900'
+              }`}
+            >
+              <LayoutGrid className="w-3.5 h-3.5 text-zinc-500" />
+              <span>Papan Kanban</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 transition-colors ${
+                viewMode === 'table'
+                  ? 'bg-white text-zinc-900 shadow-xs'
+                  : 'text-zinc-600 hover:text-zinc-900'
+              }`}
+            >
+              <List className="w-3.5 h-3.5 text-zinc-500" />
+              <span>Daftar Tabel</span>
+            </button>
+          </div>
+
           <button
             type="button"
             onClick={handleExportCsv}
@@ -523,8 +846,44 @@ export default function LeadsPage() {
         </div>
       </div>
 
+      {/* Prioritas Follow-up Hari Ini Alert Banner */}
+      {((stats.followUpDueToday || 0) > 0 || filterDueToday) && (
+        <div className="bg-gradient-to-r from-amber-50 via-amber-50 to-orange-50 border border-amber-200/90 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Clock className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="text-xs font-bold text-amber-950">
+                  Prioritas Follow-up Hari Ini: {stats.followUpDueToday || 0} Prospek Menunggu Respon
+                </h4>
+                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-200 text-amber-900 uppercase tracking-wide">
+                  Action Required
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-800 mt-0.5">
+                Respon prospek yang terjadwal hari ini agar alur penjualan tetap aktif dan tidak beralih ke alternatif lain.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setFilterDueToday((prev) => !prev)}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0 shadow-xs ${
+              filterDueToday
+                ? 'bg-zinc-900 text-white hover:bg-zinc-800'
+                : 'bg-amber-600 hover:bg-amber-700 text-white'
+            }`}
+          >
+            {filterDueToday ? 'Tampilkan Semua Prospek' : 'Fokus Tugas Hari Ini'}
+          </button>
+        </div>
+      )}
+
       {/* KPI Highlight Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Card 1: Total Leads */}
         <div className="p-4 rounded-xl bg-white border border-zinc-200 shadow-sm">
           <div className="flex items-center justify-between text-zinc-500 mb-2">
@@ -538,7 +897,7 @@ export default function LeadsPage() {
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
             <span className="text-emerald-600 font-medium">Terhubung</span>
-            <span>ke seluruh saluran sosial & email</span>
+            <span>ke seluruh saluran sosial & formulir</span>
           </div>
         </div>
 
@@ -555,11 +914,51 @@ export default function LeadsPage() {
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
             <Clock className="w-3 h-3 text-zinc-400" />
-            <span>Diperbarui secara real-time</span>
+            <span>Pesan masuk 24 jam terakhir</span>
           </div>
         </div>
 
-        {/* Card 3: Qualified Rate */}
+        {/* Card 3: Prioritas Follow-up Hari Ini */}
+        <div
+          onClick={() => setFilterDueToday((prev) => !prev)}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition-all ${
+            filterDueToday
+              ? 'bg-amber-50/60 border-amber-300 ring-2 ring-amber-200'
+              : 'bg-white border-zinc-200 hover:border-amber-300'
+          }`}
+          title="Klik untuk filter tugas follow-up hari ini"
+        >
+          <div className="flex items-center justify-between text-zinc-500 mb-2">
+            <span className="text-xs font-medium">Follow-up Hari Ini</span>
+            <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+              <Clock className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold text-amber-600 tracking-tight">
+            {stats.followUpDueToday || 0}
+          </div>
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-amber-700 font-medium">
+            <span>{filterDueToday ? '● Mode filter aktif' : 'Klik untuk filter tugas'}</span>
+          </div>
+        </div>
+
+        {/* Card 4: Total Revenue Won */}
+        <div className="p-4 rounded-xl bg-white border border-zinc-200 shadow-sm">
+          <div className="flex items-center justify-between text-zinc-500 mb-2">
+            <span className="text-xs font-medium">Pendapatan Deal Closing</span>
+            <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+              <DollarSign className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="text-2xl font-bold text-emerald-600 tracking-tight truncate" title={`Rp ${(stats.totalRevenue || 0).toLocaleString('id-ID')}`}>
+            Rp {((stats.totalRevenue || 0) / 1000000).toFixed(1)} jt
+          </div>
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
+            <span>Total dari status Deal / Won</span>
+          </div>
+        </div>
+
+        {/* Card 5: Qualified Rate */}
         <div className="p-4 rounded-xl bg-white border border-zinc-200 shadow-sm">
           <div className="flex items-center justify-between text-zinc-500 mb-2">
             <span className="text-xs font-medium">Tingkat Kualifikasi</span>
@@ -571,24 +970,7 @@ export default function LeadsPage() {
             {stats.qualifiedRate}
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
-            <span>{(stats.byStatus?.QUALIFIED || 0) + (stats.byStatus?.CONVERTED || 0)} prospek lolos kualifikasi</span>
-          </div>
-        </div>
-
-        {/* Card 4: Top Channel */}
-        <div className="p-4 rounded-xl bg-white border border-zinc-200 shadow-sm">
-          <div className="flex items-center justify-between text-zinc-500 mb-2">
-            <span className="text-xs font-medium">Saluran Terpopuler</span>
-            <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
-              <Sparkles className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="text-2xl font-bold text-zinc-900 tracking-tight capitalize flex items-center gap-2">
-            {getPlatformMeta(topPlatformInfo.platform).icon}
-            <span>{getPlatformMeta(topPlatformInfo.platform).name}</span>
-          </div>
-          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
-            <span>{topPlatformInfo.count} pesan masuk terlacak</span>
+            <span>{(stats.byStatus?.QUALIFIED || 0) + (stats.byStatus?.NEGOTIATION || 0) + (stats.byStatus?.CONVERTED || 0)} prospek potensial</span>
           </div>
         </div>
       </div>
@@ -612,7 +994,7 @@ export default function LeadsPage() {
             </span>
           </button>
 
-          {(['whatsapp', 'instagram', 'facebook', 'gmail'] as LeadPlatform[]).map((plat) => {
+          {(['whatsapp', 'instagram', 'facebook', 'gmail', 'website'] as LeadPlatform[]).map((plat) => {
             const meta = getPlatformMeta(plat);
             const count = stats.byPlatform?.[plat] || 0;
             const isSelected = selectedPlatform === plat;
@@ -658,7 +1040,7 @@ export default function LeadsPage() {
             >
               Semua
             </button>
-            {(['NEW', 'CONTACTED', 'QUALIFIED', 'CONVERTED', 'SPAM'] as LeadStatus[]).map((st) => {
+            {(['NEW', 'CONTACTED', 'QUALIFIED', 'NEGOTIATION', 'CONVERTED', 'LOST', 'SPAM'] as LeadStatus[]).map((st) => {
               const meta = getStatusMeta(st);
               const isSelected = selectedStatus === st;
               const count = stats.byStatus?.[st] || 0;
@@ -705,56 +1087,351 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {/* Leads Table / List */}
-      <div className="bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden">
-        {loading ? (
-          <div className="p-12 text-center text-zinc-500 space-y-2">
-            <RefreshCw className="w-5 h-5 animate-spin mx-auto text-zinc-400" />
-            <p className="text-xs font-medium">Memuat data prospek masuk...</p>
+      {/* Main Content: Kanban Board vs Table View */}
+      {loading ? (
+        <div className="p-16 text-center text-zinc-500 space-y-2 bg-white rounded-xl border border-zinc-200">
+          <RefreshCw className="w-5 h-5 animate-spin mx-auto text-zinc-400" />
+          <p className="text-xs font-medium">Memuat data prospek masuk...</p>
+        </div>
+      ) : filteredLeads.length === 0 ? (
+        <div className="p-16 text-center space-y-3 bg-white rounded-xl border border-zinc-200 shadow-sm">
+          <div className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-400 mx-auto flex items-center justify-center">
+            <MessageSquare className="w-6 h-6" />
           </div>
-        ) : leads.length === 0 ? (
-          <div className="p-12 text-center space-y-3">
-            <div className="w-12 h-12 rounded-full bg-zinc-100 text-zinc-400 mx-auto flex items-center justify-center">
-              <MessageSquare className="w-6 h-6" />
-            </div>
-            <div>
-              <h3 className="text-sm font-semibold text-zinc-900">Belum Ada Prospek Terlacak</h3>
-              <p className="text-xs text-zinc-500 max-w-md mx-auto mt-1">
-                Pesan dari WhatsApp, Instagram DM, Facebook Messenger, dan Gmail akan muncul otomatis di sini saat pelanggan mengirim pesan atau Anda dapat mencatat prospek secara manual.
-              </p>
-            </div>
-            <div className="pt-2 flex items-center justify-center gap-2">
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-900">
+              {filterDueToday ? 'Tidak Ada Tugas Follow-up Hari Ini' : 'Belum Ada Prospek Terlacak'}
+            </h3>
+            <p className="text-xs text-zinc-500 max-w-md mx-auto mt-1">
+              {filterDueToday
+                ? 'Seluruh prospek yang dijadwalkan hari ini telah selesai ditindaklanjuti atau belum ada jadwal yang lewat tenggat.'
+                : 'Pesan dari WhatsApp, Instagram DM, Facebook Messenger, Gmail, dan formulir website akan muncul otomatis di sini.'}
+            </p>
+          </div>
+          <div className="pt-2 flex items-center justify-center gap-2">
+            {filterDueToday ? (
               <button
                 type="button"
-                onClick={() => setIsAddModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 transition-colors"
+                onClick={() => setFilterDueToday(false)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 transition-colors"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Tambah Prospek Manual</span>
+                <span>Tampilkan Seluruh Prospek</span>
               </button>
-              <Link
-                href="/dashboard/social"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 text-xs font-medium hover:bg-zinc-50 transition-colors"
-              >
-                <Share2 className="w-3.5 h-3.5" />
-                <span>Cek Koneksi Akun</span>
-              </Link>
-            </div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setIsAddModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Tambah Prospek Manual</span>
+                </button>
+                <Link
+                  href="/dashboard/social"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 text-xs font-medium hover:bg-zinc-50 transition-colors"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>Cek Koneksi Akun</span>
+                </Link>
+              </>
+            )}
           </div>
-        ) : (
+        </div>
+      ) : viewMode === 'kanban' ? (
+        /* ================= KANBAN BOARD VIEW (MODERN FLUID PIPELINE) ================= */
+        <div className="flex gap-4 overflow-x-auto pb-6 pt-2 px-1 items-start min-h-[720px] scrollbar-thin">
+          {KANBAN_STAGES.map((col) => {
+            const colLeads = filteredLeads.filter((l) => l.status === col.status);
+            const colRevenue = colLeads.reduce((acc, l) => acc + (Number(l.dealValue) || 0), 0);
+            const statusMeta = getStatusMeta(col.status);
+
+            return (
+              <div
+                key={col.status}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  if (dragOverCol !== col.status) setDragOverCol(col.status);
+                }}
+                onDragLeave={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                  setDragOverCol(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverCol(null);
+                  const targetLeadId = e.dataTransfer.getData('text/plain') || draggedLeadId;
+                  if (targetLeadId) handleStatusChange(targetLeadId, col.status);
+                }}
+                className={`w-[308px] shrink-0 bg-zinc-50/95 border rounded-2xl flex flex-col h-[720px] shadow-xs transition-all duration-200 border-t-4 ${statusMeta.accentBorder} ${
+                  dragOverCol === col.status
+                    ? statusMeta.dropZoneClass
+                    : 'border-zinc-200/90 hover:border-zinc-300'
+                }`}
+              >
+                {/* Sticky Column Header with Metrics & Fast Add */}
+                <div className="sticky top-0 bg-zinc-50/98 backdrop-blur-md z-30 px-3.5 pt-3.5 pb-2.5 border-b border-zinc-200/90 shrink-0 rounded-t-2xl shadow-2xs">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2.5 h-2.5 rounded-full ${statusMeta.dotClass} shadow-xs`} />
+                      <div>
+                        <h3 className="text-xs font-bold text-zinc-900">{col.label}</h3>
+                        <p className="text-[10px] text-zinc-400 line-clamp-1">{col.desc}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusMeta.pillClass}`}>
+                        {colLeads.length}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAddStatus(col.status);
+                          setIsAddModalOpen(true);
+                        }}
+                        className="p-1 rounded-md text-zinc-400 hover:text-zinc-800 hover:bg-zinc-200/60 transition-colors"
+                        title={`Tambah Prospek ke tahap ${col.label}`}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  {colRevenue > 0 && (
+                    <div className="text-[11px] font-semibold text-emerald-700 mt-1.5 pt-1.5 border-t border-dashed border-zinc-200/80 flex items-center justify-between">
+                      <span className="text-[10px] font-medium text-zinc-500">Nilai Pipeline:</span>
+                      <span>Rp {colRevenue.toLocaleString('id-ID')}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Independent Scrollable Cards Container with Buffer Padding Zone */}
+                <div className="space-y-3 flex-1 overflow-y-auto px-2.5 py-2.5 scrollbar-thin">
+                  {colLeads.length === 0 ? (
+                    <div className="h-36 border-2 border-dashed border-zinc-200 bg-white/60 rounded-xl flex flex-col items-center justify-center text-zinc-400 text-xs gap-1.5 p-4 text-center transition-colors">
+                      <Inbox className="w-6 h-6 text-zinc-300" />
+                      <span className="font-semibold text-zinc-600">Belum ada prospek</span>
+                      <span className="text-[10px] text-zinc-400">Tarik kartu ke sini atau klik + untuk menambah</span>
+                    </div>
+                  ) : (
+                    colLeads.map((lead) => {
+                      const platMeta = getPlatformMeta(lead.platform);
+                      const chatUrl = getChatLink(lead);
+                      const noteCount = getNoteCount(lead.notes);
+
+                      return (
+                        <div
+                          key={lead.id}
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData('text/plain', lead.id);
+                            e.dataTransfer.effectAllowed = 'move';
+                            setDraggedLeadId(lead.id);
+                          }}
+                          onDragEnd={() => {
+                            setDraggedLeadId(null);
+                            setDragOverCol(null);
+                          }}
+                          className={`group relative bg-white rounded-xl border p-3.5 shadow-xs hover:shadow-lg hover:-translate-y-1 hover:scale-[1.015] hover:z-20 transform-gpu backface-hidden transition-all duration-200 ease-out space-y-2.5 text-xs cursor-grab active:cursor-grabbing ${
+                            draggedLeadId === lead.id ? 'opacity-40 scale-[0.98]' : ''
+                          } ${
+                            lead.unread
+                              ? 'border-blue-300 ring-1 ring-blue-100 bg-blue-50/15'
+                              : 'border-zinc-200/90 hover:border-zinc-300'
+                          }`}
+                        >
+                          {/* Card Header: Avatar Initial with Platform Badge, Name, Recency & Grip */}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              {/* Avatar Circle with initials */}
+                              <div className="relative shrink-0">
+                                <div
+                                  className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-[11px] border shadow-2xs ${getAvatarColor(
+                                    lead.senderName || lead.senderHandle || lead.externalSenderId
+                                  )}`}
+                                >
+                                  {getInitials(lead.senderName || lead.senderHandle || lead.externalSenderId)}
+                                </div>
+                                {/* Platform Icon Badge on Avatar Corner */}
+                                <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-white shadow-xs border border-zinc-100 flex items-center justify-center">
+                                  <div className="scale-75 origin-center">{platMeta.icon}</div>
+                                </div>
+                              </div>
+
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span
+                                    className="font-bold text-zinc-900 truncate text-xs hover:text-blue-600 cursor-pointer"
+                                    onClick={() => setSelectedLead(lead)}
+                                    title={lead.senderName || lead.senderHandle || lead.externalSenderId}
+                                  >
+                                    {lead.senderName || lead.senderHandle || lead.externalSenderId}
+                                  </span>
+                                  {lead.unread && (
+                                    <span
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleToggleUnread(lead);
+                                      }}
+                                      className="w-2 h-2 rounded-full bg-blue-500 shrink-0 cursor-pointer hover:ring-2 hover:ring-blue-300"
+                                      title="Pesan baru / belum dibaca (klik untuk tandai dibaca)"
+                                    />
+                                  )}
+                                </div>
+                                {lead.senderHandle && (
+                                  <div className="text-[10px] text-zinc-500 truncate font-mono">
+                                    {lead.senderHandle}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className="text-[10px] font-medium text-zinc-400">
+                                {formatRelativeTime(lead.lastContactAt || lead.firstContactAt)}
+                              </span>
+                              <GripVertical className="w-3.5 h-3.5 text-zinc-300 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </div>
+                          </div>
+
+                          {/* Message Bubble Snippet */}
+                          {lead.lastMessage && (
+                            <div
+                              onClick={() => setSelectedLead(lead)}
+                              className="text-[11px] text-zinc-700 line-clamp-2 bg-zinc-50/90 hover:bg-zinc-100/90 p-2.5 rounded-lg border border-zinc-100 cursor-pointer transition-colors leading-relaxed"
+                              title="Klik untuk melihat rincian percakapan"
+                            >
+                              {lead.lastMessage.startsWith('Membalas Story:') ? (
+                                <span className="font-medium text-pink-700">
+                                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-pink-500 mr-1.5 align-middle" />
+                                  {lead.lastMessage}
+                                </span>
+                              ) : lead.lastMessage.includes('Story Telah Berakhir') ? (
+                                <span className="text-zinc-400 italic">
+                                  {lead.lastMessage}
+                                </span>
+                              ) : lead.lastMessage.includes('Reaksi Cepat Story') ? (
+                                <span className="text-zinc-600">
+                                  🔥 {lead.lastMessage}
+                                </span>
+                              ) : (
+                                <span className="italic">"{lead.lastMessage}"</span>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Badges: Deal Value, Follow-up & Notes */}
+                          <div className="flex flex-wrap gap-1.5 items-center">
+                            {Number(lead.dealValue) > 0 && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <DollarSign className="w-3 h-3" />
+                                Rp {Number(lead.dealValue).toLocaleString('id-ID')}
+                              </span>
+                            )}
+
+                            {lead.nextFollowUpAt && (() => {
+                              const fDate = new Date(lead.nextFollowUpAt);
+                              const now = new Date();
+                              const isOverdue = fDate < now;
+                              const isToday = fDate.toDateString() === now.toDateString();
+                              return (
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border ${
+                                    isOverdue
+                                      ? 'bg-red-50 text-red-700 border-red-200 animate-pulse'
+                                      : isToday
+                                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                      : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                                  }`}
+                                  title={`Jadwal Follow-up: ${fDate.toLocaleString('id-ID')}`}
+                                >
+                                  <Clock className="w-2.5 h-2.5" />
+                                  {isOverdue ? 'Lewat: ' : isToday ? 'Hari ini ' : ''}
+                                  {fDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}
+                                </span>
+                              );
+                            })()}
+
+                            {noteCount > 0 && (
+                              <span
+                                onClick={() => setSelectedLead(lead)}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-zinc-100 text-zinc-600 border border-zinc-200 hover:bg-zinc-200 cursor-pointer"
+                                title={`${noteCount} Catatan Aktivitas Internal`}
+                              >
+                                <FileText className="w-2.5 h-2.5" />
+                                {noteCount}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Card Actions Footer */}
+                          <div className="pt-2 border-t border-zinc-100 flex items-center justify-between gap-1.5">
+                            {/* Quick Stage Mover */}
+                            <select
+                              value={lead.status}
+                              onChange={(e) => handleStatusChange(lead.id, e.target.value as LeadStatus)}
+                              className="text-[10px] font-semibold rounded-md px-2 py-1 border border-zinc-200 bg-zinc-50 text-zinc-700 hover:bg-white hover:border-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-900 cursor-pointer transition-colors"
+                              title="Pindahkan status pipeline"
+                            >
+                              {KANBAN_STAGES.map((s) => (
+                                <option key={s.status} value={s.status}>
+                                  {s.label}
+                                </option>
+                              ))}
+                              <option value="SPAM">Spam</option>
+                            </select>
+
+                            <div className="flex items-center gap-1">
+                              <a
+                                href={chatUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => {
+                                  if (lead.unread) handleToggleUnread(lead);
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-zinc-100 hover:bg-zinc-200 text-zinc-700 transition-colors"
+                                title={`Buka Chat ${platMeta.name}`}
+                              >
+                                <span>Chat</span>
+                                <ExternalLink className="w-2.5 h-2.5" />
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedLead(lead)}
+                                className="p-1 rounded-md hover:bg-zinc-100 text-zinc-500 hover:text-zinc-900 transition-colors"
+                                title="Buka Detail Prospek"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* ================= TABLE LIST VIEW ================= */
+        <div className="bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-zinc-200 bg-zinc-50/70 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
                   <th className="py-3 px-4">Saluran & Kontak</th>
                   <th className="py-3 px-4">Pesan Terakhir</th>
+                  <th className="py-3 px-4">Nilai Deal</th>
+                  <th className="py-3 px-4">Jadwal Follow-up</th>
                   <th className="py-3 px-4">Status Pipeline</th>
                   <th className="py-3 px-4">Waktu Kontak</th>
                   <th className="py-3 px-4 text-right">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-200/70 text-xs">
-                {leads.map((lead) => {
+                {filteredLeads.map((lead) => {
                   const platMeta = getPlatformMeta(lead.platform);
                   const statusMeta = getStatusMeta(lead.status);
                   const chatUrl = getChatLink(lead);
@@ -806,8 +1483,64 @@ export default function LeadsPage() {
                           className="text-zinc-700 hover:text-zinc-900 cursor-pointer line-clamp-2 text-xs"
                           title="Klik untuk detail percakapan"
                         >
-                          {lead.lastMessage || <span className="text-zinc-400 italic">Tidak ada pesan teks</span>}
+                          {lead.lastMessage ? (
+                            lead.lastMessage.startsWith('Membalas Story:') ? (
+                              <span className="font-medium text-pink-700">
+                                {lead.lastMessage}
+                              </span>
+                            ) : lead.lastMessage.includes('Story Telah Berakhir') ? (
+                              <span className="text-zinc-400 italic">
+                                {lead.lastMessage}
+                              </span>
+                            ) : lead.lastMessage.includes('Reaksi Cepat Story') ? (
+                              <span className="text-zinc-600">
+                                {lead.lastMessage}
+                              </span>
+                            ) : (
+                              lead.lastMessage
+                            )
+                          ) : (
+                            <span className="text-zinc-400 italic">Tidak ada pesan teks</span>
+                          )}
                         </div>
+                      </td>
+
+                      {/* Kolom Nilai Deal */}
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        {Number(lead.dealValue) > 0 ? (
+                          <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px]">
+                            Rp {Number(lead.dealValue).toLocaleString('id-ID')}
+                          </span>
+                        ) : (
+                          <span className="text-zinc-400 text-[11px]">-</span>
+                        )}
+                      </td>
+
+                      {/* Kolom Jadwal Follow-up */}
+                      <td className="py-3 px-4 whitespace-nowrap text-[11px]">
+                        {lead.nextFollowUpAt ? (() => {
+                          const fDate = new Date(lead.nextFollowUpAt);
+                          const now = new Date();
+                          const isOverdue = fDate < now;
+                          const isToday = fDate.toDateString() === now.toDateString();
+                          return (
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] ${
+                                isOverdue
+                                  ? 'bg-red-50 text-red-700 border-red-200 font-semibold'
+                                  : isToday
+                                  ? 'bg-amber-50 text-amber-700 border-amber-200 font-semibold'
+                                  : 'bg-zinc-100 text-zinc-600 border-zinc-200'
+                              }`}
+                            >
+                              <Clock className="w-3 h-3" />
+                              {isOverdue ? 'Lewat: ' : isToday ? 'Hari ini ' : ''}
+                              {fDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}
+                            </span>
+                          );
+                        })() : (
+                          <span className="text-zinc-400">-</span>
+                        )}
                       </td>
 
                       {/* Kolom Status Pipeline (Interactive Dropdown) */}
@@ -820,8 +1553,10 @@ export default function LeadsPage() {
                           >
                             <option value="NEW">Baru</option>
                             <option value="CONTACTED">Dihubungi</option>
-                            <option value="QUALIFIED">Terkualifikasi</option>
-                            <option value="CONVERTED">Terkonversi</option>
+                            <option value="QUALIFIED">Kualifikasi</option>
+                            <option value="NEGOTIATION">Negosiasi</option>
+                            <option value="CONVERTED">Deal / Won</option>
+                            <option value="LOST">Lost / Batal</option>
                             <option value="SPAM">Spam</option>
                           </select>
                           <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-zinc-500">
@@ -881,13 +1616,14 @@ export default function LeadsPage() {
               </tbody>
             </table>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Detail Modal */}
+      {/* Detail Modal & CRM Sales Activity Timeline */}
       {selectedLead && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/40 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-lg rounded-2xl border border-zinc-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white w-full max-w-xl rounded-2xl border border-zinc-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
             <div className="p-5 border-b border-zinc-200 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-lg border border-zinc-200 bg-zinc-50">
@@ -905,13 +1641,13 @@ export default function LeadsPage() {
               <button
                 type="button"
                 onClick={() => setSelectedLead(null)}
-                className="p-1.5 text-zinc-400 hover:text-zinc-700 rounded-lg"
+                className="p-1.5 text-zinc-400 hover:text-zinc-700 rounded-lg transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto text-xs">
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
               {/* Message Box */}
               <div>
                 <label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block mb-1.5">
@@ -922,7 +1658,7 @@ export default function LeadsPage() {
                 </div>
               </div>
 
-              {/* Status & Unread */}
+              {/* Status Pipeline & Status Baca */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block mb-1.5">
@@ -931,12 +1667,14 @@ export default function LeadsPage() {
                   <select
                     value={selectedLead.status}
                     onChange={(e) => handleStatusChange(selectedLead.id, e.target.value as LeadStatus)}
-                    className="w-full text-xs font-medium rounded-lg px-3 py-2 border border-zinc-200 bg-white focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                    className="w-full text-xs font-medium rounded-lg px-3 py-2 border border-zinc-200 bg-white focus:outline-none focus:ring-1 focus:ring-zinc-900 cursor-pointer"
                   >
                     <option value="NEW">Baru</option>
-                    <option value="CONTACTED">Dihubungi</option>
+                    <option value="CONTACTED">Sedang Dihubungi</option>
                     <option value="QUALIFIED">Terkualifikasi</option>
-                    <option value="CONVERTED">Terkonversi</option>
+                    <option value="NEGOTIATION">Negosiasi / Proposal</option>
+                    <option value="CONVERTED">Deal / Closing (Won)</option>
+                    <option value="LOST">Lost (Gagal Closing)</option>
                     <option value="SPAM">Spam</option>
                   </select>
                 </div>
@@ -948,7 +1686,7 @@ export default function LeadsPage() {
                   <button
                     type="button"
                     onClick={() => handleToggleUnread(selectedLead)}
-                    className={`w-full py-2 px-3 rounded-lg border text-xs font-medium transition-colors text-center ${
+                    className={`w-full py-2 px-3 rounded-lg border text-xs font-medium transition-colors text-center cursor-pointer ${
                       selectedLead.unread
                         ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
                         : 'bg-zinc-100 border-zinc-200 text-zinc-700 hover:bg-zinc-200'
@@ -959,8 +1697,180 @@ export default function LeadsPage() {
                 </div>
               </div>
 
+              {/* CRM Opportunity & Follow-up Scheduler Box */}
+              <div className="p-4 rounded-xl bg-emerald-50/40 border border-emerald-200/80 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-emerald-800 font-semibold text-xs">
+                    <DollarSign className="w-4 h-4 text-emerald-600" />
+                    <span>Peluang Transaksi & Jadwal Follow-up</span>
+                  </div>
+                  {selectedLead.nextFollowUpAt && (
+                    <span className="text-[10px] text-zinc-500">
+                      Tenggat: {formatLocalDateTime(selectedLead.nextFollowUpAt)}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] font-medium text-zinc-600 block mb-1">
+                      Potensi Nilai Deal (Rp)
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 font-medium text-xs">
+                        Rp
+                      </span>
+                      <input
+                        type="text"
+                        value={formatRupiahDisplay(editDealValue)}
+                        onChange={(e) => setEditDealValue(parseRupiahRaw(e.target.value))}
+                        placeholder="Contoh: 1.500.000"
+                        className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-zinc-200 bg-white text-xs font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-medium text-zinc-600 block mb-1">
+                      Jadwal Follow-up Berikutnya
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={editFollowUpDate}
+                      onChange={(e) => setEditFollowUpDate(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    disabled={isSavingDetails}
+                    onClick={() => handleSaveLeadCrmDetails(selectedLead.id)}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-medium text-xs transition-colors disabled:opacity-60 cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Calendar className="w-3.5 h-3.5" />
+                    <span>{isSavingDetails ? 'Menyimpan...' : 'Simpan Nilai & Jadwal'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Internal Sales Notes & Activity Timeline */}
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-semibold text-zinc-600 uppercase tracking-wider flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-zinc-500" />
+                    <span>Catatan Aktivitas Penjualan ({
+                      (() => {
+                        if (!selectedLead.notes) return 0;
+                        try {
+                          const p = JSON.parse(selectedLead.notes);
+                          return Array.isArray(p) ? p.length : 1;
+                        } catch {
+                          return 1;
+                        }
+                      })()
+                    })</span>
+                  </label>
+                </div>
+
+                {/* Quick Note Chips */}
+                <div className="flex items-center flex-wrap gap-1.5">
+                  <span className="text-[10px] text-zinc-400 font-medium flex items-center gap-1">
+                    <Tag className="w-3 h-3" />
+                    Template Cepat:
+                  </span>
+                  {QUICK_NOTE_CHIPS.map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() =>
+                        setNewNoteText((prev) => (prev ? `${prev} • ${chip}` : chip))
+                      }
+                      className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-700 border border-zinc-200/80 transition-colors cursor-pointer"
+                    >
+                      + {chip}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Add Note Form */}
+                <div className="flex gap-2">
+                  <textarea
+                    rows={2}
+                    value={newNoteText}
+                    onChange={(e) => setNewNoteText(e.target.value)}
+                    placeholder="Tulis catatan panggilan, negosiasi harga, atau klik salah satu template di atas..."
+                    className="w-full px-3 py-2 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs resize-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={submittingNote || !newNoteText.trim()}
+                    onClick={() => handleAddNote(selectedLead.id)}
+                    className="px-3.5 py-1.5 rounded-lg bg-zinc-900 text-white font-medium text-xs hover:bg-zinc-800 disabled:opacity-50 transition-colors shrink-0 self-end cursor-pointer"
+                  >
+                    {submittingNote ? 'Menyimpan...' : 'Kirim'}
+                  </button>
+                </div>
+
+                {/* Activity Log Chronological List */}
+                <div className="space-y-2 max-h-48 overflow-y-auto mt-2">
+                  {(() => {
+                    let notesList: LeadNote[] = [];
+                    if (selectedLead.notes) {
+                      try {
+                        const parsed = JSON.parse(selectedLead.notes);
+                        if (Array.isArray(parsed)) {
+                          notesList = parsed;
+                        } else {
+                          notesList = [
+                            {
+                              id: 'note_legacy',
+                              author: 'Catatan Awal',
+                              text: String(selectedLead.notes),
+                              createdAt: selectedLead.firstContactAt,
+                            },
+                          ];
+                        }
+                      } catch {
+                        notesList = [
+                          {
+                            id: 'note_raw',
+                            author: 'Catatan Awal',
+                            text: String(selectedLead.notes),
+                            createdAt: selectedLead.firstContactAt,
+                          },
+                        ];
+                      }
+                    }
+
+                    if (notesList.length === 0) {
+                      return (
+                        <div className="p-3 text-center text-zinc-400 bg-zinc-50/50 rounded-lg border border-dashed border-zinc-200 text-[11px]">
+                          Belum ada catatan aktivitas internal untuk prospek ini.
+                        </div>
+                      );
+                    }
+
+                    return notesList.map((note, idx) => (
+                      <div
+                        key={note.id || idx}
+                        className="p-2.5 rounded-lg bg-zinc-50 border border-zinc-200 text-zinc-800 space-y-1"
+                      >
+                        <div className="flex items-center justify-between text-[10px] text-zinc-400">
+                          <span className="font-semibold text-zinc-700">{note.author || 'Tim Penjualan'}</span>
+                          <span>{formatLocalDateTime(note.createdAt)}</span>
+                        </div>
+                        <p className="text-xs whitespace-pre-wrap leading-relaxed">{note.text}</p>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </div>
+
               {/* Metadata Info */}
-              <div className="p-3 rounded-xl bg-zinc-50 border border-zinc-200 space-y-2 text-[11px]">
+              <div className="p-3 rounded-xl bg-zinc-50 border border-zinc-200 space-y-1.5 text-[11px]">
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Sumber Atribusi:</span>
                   <span className="font-medium text-zinc-800">{selectedLead.sourceAttribution || 'Direct Inbound'}</span>
@@ -976,11 +1886,12 @@ export default function LeadsPage() {
               </div>
             </div>
 
+            {/* Footer */}
             <div className="p-4 border-t border-zinc-200 bg-zinc-50/50 flex items-center justify-between">
               <button
                 type="button"
                 onClick={() => handleDeleteLead(selectedLead.id)}
-                className="text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1.5 rounded"
+                className="text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1.5 rounded transition-colors cursor-pointer"
               >
                 Hapus Prospek
               </button>
@@ -989,7 +1900,7 @@ export default function LeadsPage() {
                 <button
                   type="button"
                   onClick={() => setSelectedLead(null)}
-                  className="px-3.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-700 text-xs font-medium hover:bg-zinc-100"
+                  className="px-3.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-700 text-xs font-medium hover:bg-zinc-100 transition-colors cursor-pointer"
                 >
                   Tutup
                 </button>
@@ -1000,7 +1911,7 @@ export default function LeadsPage() {
                   onClick={() => {
                     if (selectedLead.unread) handleToggleUnread(selectedLead);
                   }}
-                  className="px-4 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 flex items-center gap-1.5"
+                  className="px-4 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
                 >
                   <span>Buka Chat Langsung</span>
                   <ExternalLink className="w-3.5 h-3.5" />
@@ -1034,8 +1945,8 @@ export default function LeadsPage() {
                 <label className="text-[11px] font-semibold text-zinc-600 block mb-1">
                   Pilih Saluran Komunikasi <span className="text-red-500">*</span>
                 </label>
-                <div className="grid grid-cols-4 gap-2">
-                  {(['whatsapp', 'instagram', 'facebook', 'gmail'] as LeadPlatform[]).map((p) => {
+                <div className="grid grid-cols-5 gap-1.5">
+                  {(['whatsapp', 'instagram', 'facebook', 'gmail', 'website'] as LeadPlatform[]).map((p) => {
                     const m = getPlatformMeta(p);
                     const isSel = addPlatform === p;
                     return (
@@ -1043,12 +1954,12 @@ export default function LeadsPage() {
                         key={p}
                         type="button"
                         onClick={() => setAddPlatform(p)}
-                        className={`p-2 rounded-lg border text-center flex flex-col items-center gap-1 transition-colors ${
+                        className={`p-2 rounded-lg border text-center flex flex-col items-center gap-1 transition-colors cursor-pointer ${
                           isSel ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 bg-white hover:bg-zinc-50'
                         }`}
                       >
                         {m.icon}
-                        <span className="text-[10px] font-medium">{m.name.split(' ')[0]}</span>
+                        <span className="text-[10px] font-medium truncate max-w-full">{m.name.split(' ')[0]}</span>
                       </button>
                     );
                   })}
@@ -1069,6 +1980,8 @@ export default function LeadsPage() {
                       ? '6281234567890'
                       : addPlatform === 'gmail'
                       ? 'client@company.com'
+                      : addPlatform === 'website'
+                      ? 'Formulir Kontak Web / Email Prospek'
                       : '@username'
                   }
                   className="w-full px-3 py-2 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs"
@@ -1090,13 +2003,13 @@ export default function LeadsPage() {
                 </div>
                 <div>
                   <label className="text-[11px] font-semibold text-zinc-600 block mb-1">
-                    Handle / Alias
+                    Handle / Perusahaan
                   </label>
                   <input
                     type="text"
                     value={addSenderHandle}
                     onChange={(e) => setAddSenderHandle(e.target.value)}
-                    placeholder="@budis"
+                    placeholder="@budis / PT Solusi Digital"
                     className="w-full px-3 py-2 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs"
                   />
                 </div>
@@ -1107,12 +2020,44 @@ export default function LeadsPage() {
                   Pesan / Catatan Permintaan Awal
                 </label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={addMessage}
                   onChange={(e) => setAddMessage(e.target.value)}
                   placeholder="Isi pesan awal, kebutuhan produk, atau pertanyaan prospek..."
                   className="w-full px-3 py-2 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs resize-none"
                 />
+              </div>
+
+              {/* Potensi Deal & Jadwal Follow Up */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-semibold text-zinc-600 block mb-1">
+                    Potensi Nilai Deal (Rp)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 font-medium text-xs">
+                      Rp
+                    </span>
+                    <input
+                      type="text"
+                      value={formatRupiahDisplay(addDealValue)}
+                      onChange={(e) => setAddDealValue(parseRupiahRaw(e.target.value))}
+                      placeholder="Contoh: 2.500.000"
+                      className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[11px] font-semibold text-zinc-600 block mb-1">
+                    Jadwal Follow-up
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={addFollowUpDate}
+                    onChange={(e) => setAddFollowUpDate(e.target.value)}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -1123,11 +2068,12 @@ export default function LeadsPage() {
                   <select
                     value={addStatus}
                     onChange={(e) => setAddStatus(e.target.value as LeadStatus)}
-                    className="w-full px-3 py-2 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs"
+                    className="w-full px-3 py-2 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs cursor-pointer"
                   >
                     <option value="NEW">Baru</option>
-                    <option value="CONTACTED">Dihubungi</option>
+                    <option value="CONTACTED">Sedang Dihubungi</option>
                     <option value="QUALIFIED">Terkualifikasi</option>
+                    <option value="NEGOTIATION">Negosiasi / Proposal</option>
                   </select>
                 </div>
                 <div>
@@ -1138,24 +2084,37 @@ export default function LeadsPage() {
                     type="text"
                     value={addAttribution}
                     onChange={(e) => setAddAttribution(e.target.value)}
-                    placeholder="Walk-in / Event / Referensi"
+                    placeholder="Walk-in / Event / Web"
                     className="w-full px-3 py-2 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-zinc-600 block mb-1">
+                  Catatan Internal Awal Tim
+                </label>
+                <textarea
+                  rows={2}
+                  value={addNotes}
+                  onChange={(e) => setAddNotes(e.target.value)}
+                  placeholder="Catatan internal awal untuk tim sales mengenai prospek ini..."
+                  className="w-full px-3 py-2 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs resize-none"
+                />
               </div>
 
               <div className="pt-3 border-t border-zinc-100 flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
-                  className="px-3.5 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 text-xs font-medium hover:bg-zinc-50"
+                  className="px-3.5 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 text-xs font-medium hover:bg-zinc-50 cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
                   disabled={submittingAdd}
-                  className="px-4 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 disabled:opacity-60 transition-colors"
+                  className="px-4 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 disabled:opacity-60 transition-colors cursor-pointer"
                 >
                   {submittingAdd ? 'Menyimpan...' : 'Simpan Prospek'}
                 </button>

@@ -197,6 +197,14 @@ export async function ensureSocialTables(db: D1Database) {
       `).run();
     } catch {}
 
+    // Inbound Leads CRM Extensions (deal_value, next_follow_up_at, notes) (Idempotent)
+    try { await db.prepare("ALTER TABLE inbound_leads ADD COLUMN deal_value REAL DEFAULT 0;").run(); } catch {}
+    try { await db.prepare("ALTER TABLE inbound_leads ADD COLUMN next_follow_up_at TEXT;").run(); } catch {}
+    try { await db.prepare("ALTER TABLE inbound_leads ADD COLUMN notes TEXT;").run(); } catch {}
+    try {
+      await db.prepare("CREATE INDEX IF NOT EXISTS idx_leads_follow_up ON inbound_leads (project_id, next_follow_up_at);").run();
+    } catch {}
+
     // Tabel Anggota Proyek / RBAC
     try {
       await db.prepare(`
@@ -1799,6 +1807,7 @@ composioRouter.get('/leads', async (c) => {
     const platform = c.req.query('platform'); // 'all' or specific
     const status = c.req.query('status'); // 'all' or specific
     const search = c.req.query('search');
+    const dueToday = c.req.query('dueToday') === 'true' || c.req.query('dueToday') === '1';
 
     let whereClauses: string[] = ['user_id = ?'];
     let params: any[] = [user.id];
@@ -1818,6 +1827,13 @@ composioRouter.get('/leads', async (c) => {
       params.push(status.toUpperCase());
     }
 
+    if (dueToday) {
+      const endOfToday = new Date();
+      endOfToday.setHours(23, 59, 59, 999);
+      whereClauses.push('next_follow_up_at IS NOT NULL AND next_follow_up_at <= ? AND status NOT IN (\'CONVERTED\', \'LOST\', \'SPAM\')');
+      params.push(endOfToday.toISOString());
+    }
+
     if (search && search.trim()) {
       whereClauses.push('(sender_name LIKE ? OR sender_handle LIKE ? OR last_message LIKE ?)');
       const s = `%${search.trim()}%`;
@@ -1826,11 +1842,11 @@ composioRouter.get('/leads', async (c) => {
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-    // Fetch leads
+    // Fetch leads with CRM fields (deal_value, next_follow_up_at, notes)
     const { results: rawLeads } = await c.env.DB.prepare(
       `SELECT id, project_id, user_id, connection_id, platform, external_sender_id,
               sender_name, sender_handle, last_message, thread_id, status,
-              source_attribution, unread, raw_metadata, first_contact_at,
+              source_attribution, deal_value, next_follow_up_at, notes, unread, raw_metadata, first_contact_at,
               last_contact_at, created_at
        FROM inbound_leads
        ${whereSql}
@@ -1849,28 +1865,36 @@ composioRouter.get('/leads', async (c) => {
     }
 
     const { results: allSummaryRows } = await c.env.DB.prepare(
-      `SELECT platform, status, last_contact_at FROM inbound_leads ${summaryWhere};`
+      `SELECT platform, status, last_contact_at, deal_value, next_follow_up_at FROM inbound_leads ${summaryWhere};`
     )
       .bind(...summaryParams)
       .all<any>();
 
     const totalLeads = allSummaryRows.length;
-    const todayStr = new Date().toISOString().split('T')[0];
+    const nowIso = new Date().toISOString();
+    const todayStr = nowIso.split('T')[0];
+    const endOfTodayIso = new Date(new Date().setHours(23, 59, 59, 999)).toISOString();
+
     let newToday = 0;
     let qualifiedCount = 0;
+    let totalRevenue = 0;
+    let followUpDueToday = 0;
 
     const byPlatform: Record<string, number> = {
       whatsapp: 0,
       instagram: 0,
       facebook: 0,
       gmail: 0,
+      website: 0,
     };
 
     const byStatus: Record<string, number> = {
       NEW: 0,
       CONTACTED: 0,
       QUALIFIED: 0,
+      NEGOTIATION: 0,
       CONVERTED: 0,
+      LOST: 0,
       SPAM: 0,
     };
 
@@ -1883,8 +1907,20 @@ composioRouter.get('/leads', async (c) => {
       if (byStatus[st] !== undefined) byStatus[st]++;
       else byStatus[st] = 1;
 
-      if (st === 'QUALIFIED' || st === 'CONVERTED') {
+      if (st === 'QUALIFIED' || st === 'NEGOTIATION' || st === 'CONVERTED') {
         qualifiedCount++;
+      }
+
+      if (st === 'CONVERTED') {
+        totalRevenue += Number(row.deal_value) || 0;
+      }
+
+      if (
+        row.next_follow_up_at &&
+        row.next_follow_up_at <= endOfTodayIso &&
+        !['CONVERTED', 'LOST', 'SPAM'].includes(st)
+      ) {
+        followUpDueToday++;
       }
 
       if (row.last_contact_at && row.last_contact_at.startsWith(todayStr)) {
@@ -1911,6 +1947,9 @@ composioRouter.get('/leads', async (c) => {
         lastMessage: r.last_message || '',
         threadId: r.thread_id,
         status: r.status,
+        dealValue: Number(r.deal_value) || 0,
+        nextFollowUpAt: r.next_follow_up_at ? formatIsoUtc(r.next_follow_up_at) : null,
+        notes: r.notes || null,
         sourceAttribution: r.source_attribution || 'direct',
         unread: Boolean(r.unread),
         metadata: meta,
@@ -1927,6 +1966,8 @@ composioRouter.get('/leads', async (c) => {
         summary: {
           totalLeads,
           newToday,
+          followUpDueToday,
+          totalRevenue,
           qualifiedCount,
           qualifiedRate,
           byPlatform,
@@ -1935,6 +1976,8 @@ composioRouter.get('/leads', async (c) => {
         stats: {
           totalLeads,
           newToday,
+          followUpDueToday,
+          totalRevenue,
           qualifiedCount,
           qualifiedRate,
           byPlatform,
@@ -1993,7 +2036,7 @@ composioRouter.post('/leads/sync', async (c) => {
             const res: any = await composio.tools.execute('INSTAGRAM_LIST_ALL_CONVERSATIONS', {
               connectedAccountId: conn.composio_connection_id,
               userId: conn.user_id,
-              arguments: { fields: 'id,updated_time,participants,messages{id,created_time,from,message}' },
+              arguments: { fields: 'id,updated_time,unread_count,snippet,participants,messages{id,created_time,from,message,attachments,shares,story}' },
               version: '20261014_00',
             }).catch((err: any) => {
               console.warn('[Leads Sync] Instagram execution notice:', err.message);
@@ -2015,33 +2058,159 @@ composioRouter.post('/leads/sync', async (c) => {
             if (Array.isArray(convList)) {
               for (const conv of convList) {
                 const myHandle = (conn.account_handle || '').replace('@', '').toLowerCase();
-                const partner = conv.participants?.data?.find((p: any) => (p.username || '').toLowerCase() !== myHandle) || conv.participants?.data?.[0];
+                const participants: any[] = conv.participants?.data || [];
+                const partner = participants.find((p: any) => (p.username || '').toLowerCase() !== myHandle) || participants[0];
                 if (partner) {
                   const leadId = `lead_ig_${conn.id}_${partner.id || Date.now()}`;
                   const sName = partner.name || (partner.username ? `@${partner.username}` : 'Pengguna Instagram');
                   const sHandle = partner.username ? (partner.username.startsWith('@') ? partner.username : `@${partner.username}`) : null;
                   
-                  // Cari pesan terakhir dari pengirim atau pesan percakapan
-                  const msgs = conv.messages?.data || [];
-                  const partnerMsg = msgs.find((m: any) => (m.from?.username || '').toLowerCase() === (partner.username || '').toLowerCase() && m.message?.trim());
-                  const anyMsg = msgs.find((m: any) => m.message?.trim());
-                  const lastMsg = partnerMsg?.message?.trim() || anyMsg?.message?.trim() || `Percakapan DM Instagram dari @${partner.username || 'prospek'}`;
+                  // Helper ekstraksi konten pesan (Teks, Media, Reels, Story, Reaction)
+                  const extractMessageContent = (m: any): string | null => {
+                    if (!m) return null;
+
+                    // 1. Ekstraksi teks dari berbagai kemungkinan payload Meta Graph API & Webhook normalizer
+                    const rawText = (
+                      (typeof m.message === 'string' && m.message.trim()) ||
+                      (typeof m.text === 'string' && m.text.trim()) ||
+                      (m.story && typeof m.story === 'object' && typeof m.story.message === 'string' && m.story.message.trim()) ||
+                      (m.story && typeof m.story === 'object' && typeof m.story.text === 'string' && m.story.text.trim()) ||
+                      ''
+                    );
+
+                    // 2. Deteksi apakah pesan ini terkait Instagram Story (Balasan, Mention, atau Quick Reaction)
+                    const hasStory = Boolean(
+                      m.story ||
+                      (m.reply_to && m.reply_to.story) ||
+                      (m.attachments?.data && Array.isArray(m.attachments.data) && m.attachments.data.some((att: any) => {
+                        const t = String(att.type || '').toLowerCase();
+                        return t.includes('story') || t.includes('story_mention') || t.includes('story_reply');
+                      }))
+                    );
+
+                    if (hasStory) {
+                      // Jika user mengetik teks balasan pada story
+                      if (rawText) {
+                        return `Membalas Story: "${rawText}"`;
+                      }
+
+                      // Jika ada emoji reaksi cepat
+                      const reactionEmoji = 
+                        (typeof m.reaction === 'string' && m.reaction.trim()) ||
+                        (m.reactions?.data && m.reactions.data[0]?.reaction) ||
+                        (m.reactions?.data && m.reactions.data[0]?.emoji) ||
+                        null;
+
+                      if (reactionEmoji) {
+                        return `Reaksi Story: ${reactionEmoji}`;
+                      }
+
+                      // Cek jika snippet dari Meta menyediakan rangkuman
+                      if (conv.snippet && typeof conv.snippet === 'string' && conv.snippet.trim()) {
+                        return conv.snippet.trim();
+                      }
+
+                      // Evaluasi umur story (>24 jam = kadaluarsa di Meta)
+                      const msgTime = m.created_time ? new Date(m.created_time).getTime() : 0;
+                      const isExpired = msgTime > 0 && (Date.now() - msgTime > 24 * 60 * 60 * 1000);
+                      if (isExpired) {
+                        return 'Balasan Story Instagram (Story Telah Berakhir)';
+                      }
+
+                      return 'Reaksi Cepat Story Instagram (Emoji / Stiker)';
+                    }
+
+                    // 3. Teks DM biasa
+                    if (rawText) {
+                      return rawText;
+                    }
+
+                    // 4. Reels atau Postingan yang dibagikan
+                    if (m.shares?.data && Array.isArray(m.shares.data) && m.shares.data.length > 0) {
+                      return 'Membagikan Reels/Postingan Instagram';
+                    }
+
+                    // 5. Lampiran Media (Foto, Video, Voice Note)
+                    if (m.attachments?.data && Array.isArray(m.attachments.data) && m.attachments.data.length > 0) {
+                      const firstAtt = m.attachments.data[0];
+                      const attType = String(firstAtt?.type || '').toLowerCase();
+                      if (attType.includes('image') || attType.includes('photo')) return '[Foto/Gambar]';
+                      if (attType.includes('video')) return '[Video/Reels]';
+                      if (attType.includes('audio')) return '[Voice Note/Audio]';
+                      return '[Lampiran Media]';
+                    }
+
+                    return null;
+                  };
+
+                  // Cari pesan terakhir dari pengirim atau percakapan
+                  const msgs: any[] = conv.messages?.data || [];
+                  
+                  // 1. Prioritas cari pesan dari lawan bicara (partner) via ID pengirim atau username
+                  const partnerMsgObj = msgs.find((m: any) => {
+                    const isFromPartner = 
+                      (m.from?.id && partner.id && String(m.from.id) === String(partner.id)) ||
+                      (m.from?.username && partner.username && (m.from.username || '').toLowerCase() === (partner.username || '').toLowerCase());
+                    return isFromPartner && extractMessageContent(m);
+                  });
+
+                  // 2. Jika tidak ada pesan spesifik partner, ambil pesan apapun yang memiliki isi konten
+                  let anyMsgContent: string | null = null;
+                  for (const m of msgs) {
+                    const c = extractMessageContent(m);
+                    if (c) {
+                      anyMsgContent = c;
+                      break;
+                    }
+                  }
+
+                  // 3. Evaluasi lastMsg dengan prioritas teks paling spesifik
+                  let candidateMsg = partnerMsgObj
+                    ? extractMessageContent(partnerMsgObj)
+                    : (anyMsgContent || null);
+
+                  // Jika candidateMsg hanya notifikasi generik, utamakan conv.snippet resmi dari Meta
+                  if (
+                    (!candidateMsg || 
+                     candidateMsg === 'Membalas Cerita / Story Instagram' || 
+                     candidateMsg.startsWith('Percakapan DM Instagram')) &&
+                    conv.snippet &&
+                    typeof conv.snippet === 'string' &&
+                    conv.snippet.trim()
+                  ) {
+                    candidateMsg = conv.snippet.trim();
+                  }
+
+                  const lastMsg = candidateMsg || `Percakapan DM Instagram dari ${sName}`;
                   const lastTime = conv.updated_time ? formatIsoUtc(conv.updated_time) : new Date().toISOString();
+
+                  // Status keterbacaan admin dari aplikasi Instagram (unread_count > 0 = belum dibaca)
+                  const isUnread = (conv.unread_count !== undefined && conv.unread_count !== null)
+                    ? (Number(conv.unread_count) > 0 ? 1 : 0)
+                    : 1;
 
                   await c.env.DB.prepare(
                     `INSERT INTO inbound_leads (
                       id, project_id, user_id, connection_id, platform, external_sender_id,
                       sender_name, sender_handle, last_message, thread_id, status, source_attribution,
-                      raw_metadata, first_contact_at, last_contact_at, created_at
-                    ) VALUES (?, ?, ?, ?, 'instagram', ?, ?, ?, ?, ?, 'NEW', 'bio_link', ?, ?, ?, datetime('now'))
+                      unread, raw_metadata, first_contact_at, last_contact_at, created_at
+                    ) VALUES (?, ?, ?, ?, 'instagram', ?, ?, ?, ?, ?, 'NEW', 'bio_link', ?, ?, ?, ?, datetime('now'))
                     ON CONFLICT(project_id, platform, external_sender_id) DO UPDATE SET
-                      last_message = excluded.last_message,
+                      last_message = CASE 
+                        WHEN excluded.last_message IS NOT NULL 
+                             AND excluded.last_message != '' 
+                             AND excluded.last_message NOT IN ('Percakapan Instagram', 'Percakapan DM Instagram', 'Membalas Cerita / Story Instagram')
+                        THEN excluded.last_message 
+                        ELSE inbound_leads.last_message 
+                      END,
                       last_contact_at = excluded.last_contact_at,
                       sender_name = COALESCE(excluded.sender_name, inbound_leads.sender_name),
-                      sender_handle = COALESCE(excluded.sender_handle, inbound_leads.sender_handle);`
+                      sender_handle = COALESCE(excluded.sender_handle, inbound_leads.sender_handle),
+                      unread = excluded.unread;`
                   ).bind(
                     leadId, effectiveProjectId, user.id, conn.id, partner.id || sHandle,
-                    sName, sHandle, lastMsg, conv.id || null, JSON.stringify({ partner }),
+                    sName, sHandle, lastMsg, conv.id || null, isUnread,
+                    JSON.stringify({ partner, unreadCount: conv.unread_count, lastMessagePreview: lastMsg }),
                     lastTime, lastTime
                   ).run();
                   syncedCount++;
@@ -2128,8 +2297,29 @@ composioRouter.post('/leads', async (c) => {
     const senderName = String(body.senderName || 'Calon Prospek').trim();
     const senderHandle = String(body.senderHandle || '').trim();
     const lastMessage = String(body.lastMessage || 'Halo, saya tertarik dengan layanan Anda.').trim();
-    const status = String(body.status || 'NEW').trim().toUpperCase();
-    const sourceAttribution = String(body.sourceAttribution || 'cta_button').trim();
+    const validStatuses = ['NEW', 'CONTACTED', 'QUALIFIED', 'NEGOTIATION', 'CONVERTED', 'LOST', 'SPAM'];
+    const rawStatus = String(body.status || 'NEW').trim().toUpperCase();
+    const status = validStatuses.includes(rawStatus) ? rawStatus : 'NEW';
+    const sourceAttribution = String(body.sourceAttribution || 'manual_entry').trim();
+    const dealValue = Number(body.dealValue) || 0;
+    const nextFollowUpAt = body.nextFollowUpAt ? String(body.nextFollowUpAt).trim() : null;
+
+    let initialNotes: string | null = null;
+    if (body.notes && typeof body.notes === 'string') {
+      try {
+        JSON.parse(body.notes);
+        initialNotes = body.notes;
+      } catch {
+        initialNotes = JSON.stringify([
+          {
+            id: `note_${Date.now().toString(36)}`,
+            author: user.username || 'User',
+            text: body.notes.trim(),
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+      }
+    }
 
     const externalSenderId = senderHandle || `manual_${Date.now()}`;
     const leadId = `lead_${platform}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
@@ -2138,16 +2328,20 @@ composioRouter.post('/leads', async (c) => {
       `INSERT INTO inbound_leads (
         id, project_id, user_id, connection_id, platform, external_sender_id,
         sender_name, sender_handle, last_message, thread_id, status, source_attribution,
-        unread, raw_metadata, first_contact_at, last_contact_at, created_at
-      ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, 1, '{}', datetime('now'), datetime('now'), datetime('now'))
+        deal_value, next_follow_up_at, notes, unread, raw_metadata, first_contact_at, last_contact_at, created_at
+      ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 1, '{}', datetime('now'), datetime('now'), datetime('now'))
       ON CONFLICT(project_id, platform, external_sender_id) DO UPDATE SET
         last_message = excluded.last_message,
         last_contact_at = datetime('now'),
-        status = excluded.status;`
+        status = excluded.status,
+        deal_value = CASE WHEN excluded.deal_value > 0 THEN excluded.deal_value ELSE inbound_leads.deal_value END,
+        next_follow_up_at = COALESCE(excluded.next_follow_up_at, inbound_leads.next_follow_up_at),
+        notes = COALESCE(excluded.notes, inbound_leads.notes);`
     )
       .bind(
         leadId, projectId, user.id, platform, externalSenderId,
-        senderName, senderHandle, lastMessage, status, sourceAttribution
+        senderName, senderHandle, lastMessage, status, sourceAttribution,
+        dealValue, nextFollowUpAt, initialNotes
       )
       .run();
 
@@ -2164,7 +2358,7 @@ composioRouter.post('/leads', async (c) => {
 
 // -------------------------------------------------------------
 // PATCH /api/composio/leads/:id
-// Updates lead pipeline status or marks as read
+// Updates lead pipeline status, deal value, follow-up schedule, notes, or marks as read
 // -------------------------------------------------------------
 composioRouter.patch('/leads/:id', async (c) => {
   const user = await extractUser(c);
@@ -2178,7 +2372,7 @@ composioRouter.patch('/leads/:id', async (c) => {
   try {
     await ensureSocialTables(c.env.DB);
 
-    const validStatuses = ['NEW', 'CONTACTED', 'QUALIFIED', 'CONVERTED', 'SPAM'];
+    const validStatuses = ['NEW', 'CONTACTED', 'QUALIFIED', 'NEGOTIATION', 'CONVERTED', 'LOST', 'SPAM'];
     let updateSql: string[] = [];
     let params: any[] = [];
 
@@ -2200,10 +2394,59 @@ composioRouter.patch('/leads/:id', async (c) => {
       params.push(String(body.lastMessage));
     }
 
+    if (body.dealValue !== undefined) {
+      updateSql.push('deal_value = ?');
+      params.push(Math.max(0, Number(body.dealValue) || 0));
+    }
+
+    if (body.nextFollowUpAt !== undefined) {
+      updateSql.push('next_follow_up_at = ?');
+      params.push(body.nextFollowUpAt ? String(body.nextFollowUpAt).trim() : null);
+    }
+
+    if (body.notes !== undefined) {
+      updateSql.push('notes = ?');
+      params.push(body.notes ? String(body.notes) : null);
+    }
+
+    // Append internal sales note / activity log
+    if (body.appendNote && String(body.appendNote).trim()) {
+      const existingLead: any = await c.env.DB.prepare(
+        'SELECT notes FROM inbound_leads WHERE id = ? AND user_id = ? LIMIT 1;'
+      )
+        .bind(leadId, user.id)
+        .first();
+
+      let notesList: any[] = [];
+      if (existingLead && existingLead.notes) {
+        try {
+          const parsed = JSON.parse(existingLead.notes);
+          if (Array.isArray(parsed)) {
+            notesList = parsed;
+          } else {
+            notesList = [{ id: 'n_prev', author: 'Sistem', text: existingLead.notes, createdAt: new Date().toISOString() }];
+          }
+        } catch {
+          notesList = [{ id: 'n_prev', author: 'Sistem', text: existingLead.notes, createdAt: new Date().toISOString() }];
+        }
+      }
+
+      notesList.unshift({
+        id: `note_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 5)}`,
+        author: user.username || 'User',
+        text: String(body.appendNote).trim(),
+        createdAt: new Date().toISOString(),
+      });
+
+      updateSql.push('notes = ?');
+      params.push(JSON.stringify(notesList));
+    }
+
     if (updateSql.length === 0) {
       return c.json({ success: false, error: 'Tidak ada data pembaruan' }, 400);
     }
 
+    updateSql.push("last_contact_at = datetime('now')");
     params.push(leadId, user.id);
 
     await c.env.DB.prepare(
@@ -2214,7 +2457,7 @@ composioRouter.patch('/leads/:id', async (c) => {
 
     return c.json({
       success: true,
-      message: 'Status prospek berhasil diperbarui',
+      message: 'Status dan data prospek berhasil diperbarui',
     });
   } catch (err: any) {
     console.error('[Patch Lead Error]', err.message);

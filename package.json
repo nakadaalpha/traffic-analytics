@@ -9,9 +9,11 @@
   ],
   "scripts": {
     "dev": "./start-dev.sh",
+    "dev:live": "./start-dev-remote.sh",
     "build": "npm run build --workspace=frontend",
     "build:frontend": "npm run build --workspace=frontend",
     "dev:backend": "npm run dev --workspace=backend",
+    "dev:backend:remote": "npm run dev:remote --workspace=backend",
     "dev:frontend": "npm run dev --workspace=frontend",
     "deploy:backend": "npm run deploy --workspace=backend"
   },
