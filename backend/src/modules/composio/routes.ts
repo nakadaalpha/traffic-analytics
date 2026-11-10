@@ -197,12 +197,29 @@ export async function ensureSocialTables(db: D1Database) {
       `).run();
     } catch {}
 
-    // Inbound Leads CRM Extensions (deal_value, next_follow_up_at, notes) (Idempotent)
+    // Inbound Leads CRM Extensions (deal_value, next_follow_up_at, notes, last_message_direction) (Idempotent)
     try { await db.prepare("ALTER TABLE inbound_leads ADD COLUMN deal_value REAL DEFAULT 0;").run(); } catch {}
     try { await db.prepare("ALTER TABLE inbound_leads ADD COLUMN next_follow_up_at TEXT;").run(); } catch {}
     try { await db.prepare("ALTER TABLE inbound_leads ADD COLUMN notes TEXT;").run(); } catch {}
+    try { await db.prepare("ALTER TABLE inbound_leads ADD COLUMN last_message_direction TEXT DEFAULT 'inbound';").run(); } catch {}
     try {
       await db.prepare("CREATE INDEX IF NOT EXISTS idx_leads_follow_up ON inbound_leads (project_id, next_follow_up_at);").run();
+    } catch {}
+
+    // Migrasi cerdas: Otomatis pisahkan prospek outreach outbound ke status 'CONTACTED'
+    try {
+      await db.prepare(`
+        UPDATE inbound_leads 
+        SET status = 'CONTACTED' 
+        WHERE status = 'NEW' 
+          AND (
+            last_message_direction = 'outbound' 
+            OR last_message LIKE '%dari tim gflowps%' 
+            OR last_message LIKE '%kenalin aku dari tim%'
+            OR last_message LIKE '%kenalin kami dari tim%'
+            OR last_message LIKE '%tim fireup%'
+          );
+      `).run();
     } catch {}
 
     // Tabel Anggota Proyek / RBAC
@@ -1842,11 +1859,13 @@ composioRouter.get('/leads', async (c) => {
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-    // Fetch leads with CRM fields (deal_value, next_follow_up_at, notes)
+    // Fetch leads with CRM fields (deal_value, next_follow_up_at, notes, last_message_direction)
     const { results: rawLeads } = await c.env.DB.prepare(
       `SELECT id, project_id, user_id, connection_id, platform, external_sender_id,
               sender_name, sender_handle, last_message, thread_id, status,
-              source_attribution, deal_value, next_follow_up_at, notes, unread, raw_metadata, first_contact_at,
+              source_attribution, deal_value, next_follow_up_at, notes, unread,
+              COALESCE(last_message_direction, 'inbound') as last_message_direction,
+              raw_metadata, first_contact_at,
               last_contact_at, created_at
        FROM inbound_leads
        ${whereSql}
@@ -1865,7 +1884,7 @@ composioRouter.get('/leads', async (c) => {
     }
 
     const { results: allSummaryRows } = await c.env.DB.prepare(
-      `SELECT platform, status, last_contact_at, deal_value, next_follow_up_at FROM inbound_leads ${summaryWhere};`
+      `SELECT platform, status, last_contact_at, deal_value, next_follow_up_at, last_message_direction, last_message FROM inbound_leads ${summaryWhere};`
     )
       .bind(...summaryParams)
       .all<any>();
@@ -1903,7 +1922,21 @@ composioRouter.get('/leads', async (c) => {
       if (byPlatform[p] !== undefined) byPlatform[p]++;
       else byPlatform[p] = 1;
 
-      const st = (row.status || 'NEW').toUpperCase();
+      let st = (row.status || 'NEW').toUpperCase();
+      const isOutboundMsg = 
+        row.last_message_direction === 'outbound' ||
+        (row.last_message && (
+          row.last_message.toLowerCase().includes('dari tim gflowps') ||
+          row.last_message.toLowerCase().includes('kenalin aku dari tim') ||
+          row.last_message.toLowerCase().includes('kenalin kami dari tim') ||
+          row.last_message.toLowerCase().includes('tim fireup')
+        ));
+
+      // Otomatis pisahkan prospek outreach yang sudah dikirimi pesan ke status 'CONTACTED'
+      if (st === 'NEW' && isOutboundMsg) {
+        st = 'CONTACTED';
+      }
+
       if (byStatus[st] !== undefined) byStatus[st]++;
       else byStatus[st] = 1;
 
@@ -1931,10 +1964,28 @@ composioRouter.get('/leads', async (c) => {
     const qualifiedRate = totalLeads > 0 ? `${((qualifiedCount / totalLeads) * 100).toFixed(1)}%` : '0.0%';
 
     const leads = (rawLeads || []).map((r: any) => {
-      let meta = {};
+      let meta: any = {};
       try {
         meta = r.raw_metadata ? JSON.parse(r.raw_metadata) : {};
       } catch {}
+
+      let direction: 'inbound' | 'outbound' = 
+        r.last_message_direction === 'outbound' || meta.direction === 'outbound'
+          ? 'outbound'
+          : 'inbound';
+
+      // Cerdas mendeteksi pesan outreach outbound jika data historis belum tersinkronisasi ulang
+      if (direction === 'inbound' && r.last_message) {
+        const lowerMsg = r.last_message.toLowerCase();
+        if (
+          lowerMsg.includes('dari tim gflowps') ||
+          lowerMsg.includes('kenalin aku dari tim') ||
+          lowerMsg.includes('kenalin kami dari tim') ||
+          lowerMsg.includes('tim fireup')
+        ) {
+          direction = 'outbound';
+        }
+      }
 
       return {
         id: r.id,
@@ -1946,12 +1997,13 @@ composioRouter.get('/leads', async (c) => {
         senderHandle: r.sender_handle || null,
         lastMessage: r.last_message || '',
         threadId: r.thread_id,
-        status: r.status,
+        status: (r.status === 'NEW' && direction === 'outbound') ? 'CONTACTED' : (r.status || 'NEW'),
         dealValue: Number(r.deal_value) || 0,
         nextFollowUpAt: r.next_follow_up_at ? formatIsoUtc(r.next_follow_up_at) : null,
         notes: r.notes || null,
         sourceAttribution: r.source_attribution || 'direct',
         unread: Boolean(r.unread),
+        lastMessageDirection: direction,
         metadata: meta,
         firstContactAt: formatIsoUtc(r.first_contact_at),
         lastContactAt: formatIsoUtc(r.last_contact_at),
@@ -2146,28 +2198,63 @@ composioRouter.post('/leads/sync', async (c) => {
                   // Cari pesan terakhir dari pengirim atau percakapan
                   const msgs: any[] = conv.messages?.data || [];
                   
-                  // 1. Prioritas cari pesan dari lawan bicara (partner) via ID pengirim atau username
-                  const partnerMsgObj = msgs.find((m: any) => {
+                  // Urutkan pesan dari yang paling baru ke paling lama berdasarkan created_time
+                  const sortedMsgs = [...msgs].sort((a: any, b: any) => {
+                    const tA = a.created_time ? new Date(a.created_time).getTime() : 0;
+                    const tB = b.created_time ? new Date(b.created_time).getTime() : 0;
+                    return tB - tA;
+                  });
+                  const latestMsgObj = sortedMsgs[0] || null;
+
+                  const partnerId = partner.id ? String(partner.id) : '';
+                  const partnerUser = (partner.username || '').toLowerCase();
+
+                  // 1. Cek apakah latestMsgObj berasal dari lawan bicara (partner) atau akun internal (outbound)
+                  let messageDirection: 'inbound' | 'outbound' = 'inbound';
+                  let candidateMsg: string | null = null;
+                  let rawMsgTime: string | null = null;
+
+                  // Prioritas cari pesan dari lawan bicara (partner) via ID pengirim atau username
+                  const partnerMsgObj = sortedMsgs.find((m: any) => {
                     const isFromPartner = 
-                      (m.from?.id && partner.id && String(m.from.id) === String(partner.id)) ||
-                      (m.from?.username && partner.username && (m.from.username || '').toLowerCase() === (partner.username || '').toLowerCase());
+                      (m.from?.id && partnerId && String(m.from.id) === partnerId) ||
+                      (m.from?.username && partnerUser && (m.from.username || '').toLowerCase() === partnerUser);
                     return isFromPartner && extractMessageContent(m);
                   });
 
-                  // 2. Jika tidak ada pesan spesifik partner, ambil pesan apapun yang memiliki isi konten
-                  let anyMsgContent: string | null = null;
-                  for (const m of msgs) {
-                    const c = extractMessageContent(m);
-                    if (c) {
-                      anyMsgContent = c;
-                      break;
-                    }
+                  if (latestMsgObj) {
+                    const latestContent = extractMessageContent(latestMsgObj);
+                    const senderId = latestMsgObj.from?.id ? String(latestMsgObj.from.id) : '';
+                    const senderUser = (latestMsgObj.from?.username || '').toLowerCase();
+
+                    const isLatestFromPartner = Boolean(
+                      (partnerId && senderId && senderId === partnerId) ||
+                      (partnerUser && senderUser && senderUser === partnerUser)
+                    );
+
+                    messageDirection = isLatestFromPartner ? 'inbound' : 'outbound';
+                    candidateMsg = latestContent;
+                    rawMsgTime = latestMsgObj.created_time || null;
                   }
 
-                  // 3. Evaluasi lastMsg dengan prioritas teks paling spesifik
-                  let candidateMsg = partnerMsgObj
-                    ? extractMessageContent(partnerMsgObj)
-                    : (anyMsgContent || null);
+                  // Jika latestMsgObj tidak memiliki teks terurai, fallback ke partnerMsgObj
+                  if (!candidateMsg && partnerMsgObj) {
+                    candidateMsg = extractMessageContent(partnerMsgObj);
+                    rawMsgTime = partnerMsgObj.created_time || rawMsgTime;
+                    messageDirection = 'inbound';
+                  }
+
+                  // 2. Jika masih kosong, ambil pesan apapun yang memiliki isi konten
+                  if (!candidateMsg) {
+                    for (const m of sortedMsgs) {
+                      const c = extractMessageContent(m);
+                      if (c) {
+                        candidateMsg = c;
+                        rawMsgTime = m.created_time || rawMsgTime;
+                        break;
+                      }
+                    }
+                  }
 
                   // Jika candidateMsg hanya notifikasi generik, utamakan conv.snippet resmi dari Meta
                   if (
@@ -2182,35 +2269,47 @@ composioRouter.post('/leads/sync', async (c) => {
                   }
 
                   const lastMsg = candidateMsg || `Percakapan DM Instagram dari ${sName}`;
-                  const lastTime = conv.updated_time ? formatIsoUtc(conv.updated_time) : new Date().toISOString();
+                  // Prioritas timestamp riil: waktu pengiriman pesan lawan bicara / pesan terakhir -> updated_time percakapan
+                  const effectiveTime = rawMsgTime || (msgs.length > 0 ? msgs[0]?.created_time : null) || conv.updated_time;
+                  const lastTime = effectiveTime ? formatIsoUtc(effectiveTime) : new Date().toISOString();
 
                   // Status keterbacaan admin dari aplikasi Instagram (unread_count > 0 = belum dibaca)
                   const isUnread = (conv.unread_count !== undefined && conv.unread_count !== null)
                     ? (Number(conv.unread_count) > 0 ? 1 : 0)
                     : 1;
 
+                  const initialStatus = messageDirection === 'outbound' ? 'CONTACTED' : 'NEW';
+
                   await c.env.DB.prepare(
                     `INSERT INTO inbound_leads (
                       id, project_id, user_id, connection_id, platform, external_sender_id,
                       sender_name, sender_handle, last_message, thread_id, status, source_attribution,
-                      unread, raw_metadata, first_contact_at, last_contact_at, created_at
-                    ) VALUES (?, ?, ?, ?, 'instagram', ?, ?, ?, ?, ?, 'NEW', 'bio_link', ?, ?, ?, ?, datetime('now'))
+                      unread, last_message_direction, raw_metadata, first_contact_at, last_contact_at, created_at
+                    ) VALUES (?, ?, ?, ?, 'instagram', ?, ?, ?, ?, ?, ?, 'bio_link', ?, ?, ?, ?, ?, datetime('now'))
                     ON CONFLICT(project_id, platform, external_sender_id) DO UPDATE SET
                       last_message = CASE 
                         WHEN excluded.last_message IS NOT NULL 
                              AND excluded.last_message != '' 
-                             AND excluded.last_message NOT IN ('Percakapan Instagram', 'Percakapan DM Instagram', 'Membalas Cerita / Story Instagram')
+                             AND excluded.last_message NOT LIKE 'Percakapan DM Instagram%'
+                             AND excluded.last_message NOT LIKE 'Percakapan Instagram%'
+                             AND excluded.last_message != 'Membalas Cerita / Story Instagram'
                         THEN excluded.last_message 
                         ELSE inbound_leads.last_message 
                       END,
                       last_contact_at = excluded.last_contact_at,
+                      last_message_direction = excluded.last_message_direction,
                       sender_name = COALESCE(excluded.sender_name, inbound_leads.sender_name),
                       sender_handle = COALESCE(excluded.sender_handle, inbound_leads.sender_handle),
+                      status = CASE
+                        WHEN inbound_leads.status = 'NEW' AND excluded.last_message_direction = 'outbound'
+                        THEN 'CONTACTED'
+                        ELSE inbound_leads.status
+                      END,
                       unread = excluded.unread;`
                   ).bind(
                     leadId, effectiveProjectId, user.id, conn.id, partner.id || sHandle,
-                    sName, sHandle, lastMsg, conv.id || null, isUnread,
-                    JSON.stringify({ partner, unreadCount: conv.unread_count, lastMessagePreview: lastMsg }),
+                    sName, sHandle, lastMsg, conv.id || null, initialStatus, isUnread, messageDirection,
+                    JSON.stringify({ partner, unreadCount: conv.unread_count, lastMessagePreview: lastMsg, messageCreatedAt: effectiveTime || null, direction: messageDirection }),
                     lastTime, lastTime
                   ).run();
                   syncedCount++;
