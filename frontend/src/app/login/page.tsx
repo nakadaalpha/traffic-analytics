@@ -44,13 +44,23 @@ export default function LoginPage() {
         }),
       });
 
-      const data = await res.json();
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        // Non-JSON response (e.g. 500/502 saat backend port 5000 offline)
+        data = null;
+      }
 
-      if (res.ok && data.success) {
+      if (res.ok && data?.success) {
         login({ token: data.token, user: data.data });
         window.location.href = '/dashboard';
       } else {
-        setError(data.error || 'Email/username atau kata sandi tidak valid');
+        if (!res.ok && !data) {
+          setError('Server backend (port 5000) sedang offline atau tidak dapat dijangkau. Pastikan backend telah dijalankan.');
+        } else {
+          setError(data?.error || 'Email/username atau kata sandi tidak valid');
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Gagal terhubung ke server');

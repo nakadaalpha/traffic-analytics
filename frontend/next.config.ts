@@ -25,6 +25,10 @@ const nextConfig: NextConfig = {
         source: '/api/composio/:path*',
         destination: `${backendUrl}/api/composio/:path*`,
       },
+      {
+        source: '/api/webhooks/:path*',
+        destination: `${backendUrl}/api/webhooks/:path*`,
+      },
     ];
   },
 };

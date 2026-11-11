@@ -3,12 +3,15 @@ import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { composioRouter } from './modules/composio/routes';
+import { webhookRouter } from './modules/webhooks/routes';
 import { handleSocialMediaSync } from './jobs/socialSyncJob';
 
 export type Bindings = {
   DB: D1Database;
   JWT_SECRET?: string;
   COMPOSIO_API_KEY?: string;
+  META_WEBHOOK_VERIFY_TOKEN?: string;
+  META_APP_SECRET?: string;
 };
 
 export type Variables = {
@@ -275,6 +278,11 @@ app.get('/health', (c) => {
 // Composio v3 Social Media Engine Sub-Router
 // -------------------------------------------------------------
 app.route('/api/composio', composioRouter);
+
+// -------------------------------------------------------------
+// Omni-Channel Real-Time Webhook Engine (Meta, WhatsApp, Forms)
+// -------------------------------------------------------------
+app.route('/api/webhooks', webhookRouter);
 
 // -------------------------------------------------------------
 // GET /tracker.js (Edge-Served Universal Tracker Script)

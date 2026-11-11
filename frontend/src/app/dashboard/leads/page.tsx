@@ -12,6 +12,7 @@ import {
   ExternalLink,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Clock,
   Sparkles,
   UserCheck,
@@ -40,6 +41,7 @@ import {
   User,
   ArrowUpRight,
   ArrowDownLeft,
+  Copy,
 } from "lucide-react";
 import { useProject } from "@/context/ProjectContext";
 
@@ -64,6 +66,25 @@ const QUICK_NOTE_CHIPS = [
   "Menunggu Keputusan Direksi",
 ];
 
+const QUICK_REPLY_TEMPLATES = [
+  {
+    label: "👋 Salam Pembuka",
+    text: "Halo Kak, terima kasih telah menghubungi kami. Ada yang bisa kami bantu seputar layanan FireUp?",
+  },
+  {
+    label: "📅 Jadwal Diskusi",
+    text: "Boleh kami tahu jadwal luang Kakak untuk diskusi singkat via call/Zoom?",
+  },
+  {
+    label: "💼 Kirim Portofolio",
+    text: "Berikut ringkasan profil layanan dan portofolio kami: fireup.id/portfolio",
+  },
+  {
+    label: "💬 Lanjut WhatsApp",
+    text: "Halo Kak, agar koordinasi lebih mudah dan responsif, bolehkah kami lanjutkan obrolan via WhatsApp?",
+  },
+];
+
 type LeadPlatform = "whatsapp" | "instagram" | "facebook" | "gmail" | "website";
 type LeadStatus =
   | "NEW"
@@ -78,6 +99,10 @@ export interface LeadNote {
   id: string;
   author: string;
   text: string;
+  type?: "note" | "reply" | "chat";
+  direction?: "inbound" | "outbound";
+  channel?: string;
+  apiSent?: boolean;
   createdAt: string;
 }
 
@@ -99,22 +124,290 @@ interface InboundLead {
   sourceAttribution: string | null;
   unread: boolean;
   lastMessageDirection?: 'inbound' | 'outbound' | null;
+  metadata?: any;
   firstContactAt: string;
   lastContactAt: string;
   createdAt: string;
 }
 
-function isOutboundLeadMessage(lead: InboundLead | null | undefined): boolean {
+// Menentukan apakah pesan terakhir adalah outbound oleh tim (untuk cuplikan kartu/tabel)
+function isLatestMessageOutbound(lead: InboundLead | null | undefined): boolean {
   if (!lead) return false;
-  if (lead.lastMessageDirection === 'outbound') return true;
-  if (lead.lastMessageDirection === 'inbound') return false;
-  if (!lead.lastMessage) return false;
+  if (!lead.lastMessage) {
+    return lead.lastMessageDirection === 'outbound';
+  }
   const msg = lead.lastMessage.toLowerCase();
-  return (
+  const hasOutboundPhrase = (
     msg.includes('dari tim gflowps') ||
     msg.includes('kenalin aku dari tim') ||
     msg.includes('kenalin kami dari tim') ||
-    msg.includes('tim fireup')
+    msg.includes('tim fireup') ||
+    msg.includes('di tunggu kabar baik') ||
+    msg.includes('ditunggu kabar baik') ||
+    msg.includes('ada yang bisa di bantu') ||
+    msg.includes('ada yang bisa dibantu') ||
+    msg.includes('terima kasih telah menghubungi') ||
+    msg.includes('halo kak, terima kasih') ||
+    msg.includes('hallo kak, terima kasih') ||
+    msg.includes('siap kak') ||
+    msg.includes('baik kak') ||
+    msg.includes('okei kak') ||
+    msg.includes('oke kak')
+  );
+  if (hasOutboundPhrase) return true;
+  if (lead.lastMessageDirection === 'outbound') return true;
+  if (lead.lastMessageDirection === 'inbound') return false;
+  return false;
+}
+
+// Kompatibilitas mundur
+function isOutboundLeadMessage(lead: InboundLead | null | undefined): boolean {
+  return isLatestMessageOutbound(lead);
+}
+
+// Menentukan apakah percakapan saat ini hanya memiliki pesan outbound dari tim admin
+function isTeamInitiatedOutreach(lead: InboundLead | null | undefined): boolean {
+  if (!lead) return false;
+  // Jika tersimpan pesan awal customer atau catatan inbound yang valid, ini adalah inbound lead
+  if (lead.metadata?.initialInquiry) return false;
+  if (lead.notes) {
+    try {
+      const parsed = JSON.parse(lead.notes);
+      if (
+        Array.isArray(parsed) &&
+        parsed.some(
+          (n: any) =>
+            (n.direction === 'inbound' || n.type === 'chat') &&
+            !isLatestMessageOutbound({
+              ...lead,
+              lastMessage: n.text,
+              lastMessageDirection: undefined,
+            })
+        )
+      ) {
+        return false;
+      }
+    } catch {}
+  }
+  // Jika arah pesan terakhir adalah outbound atau terdeteksi pola balasan/outreach admin,
+  // dan belum ada pesan inbound customer yang tersimpan
+  if (lead.lastMessageDirection === 'outbound' || isLatestMessageOutbound(lead)) {
+    return true;
+  }
+  if (lead.metadata?.direction === 'outbound' || lead.sourceAttribution === 'outreach') {
+    return true;
+  }
+  return false;
+}
+
+// Mendapatkan pesan awal prospek secara permanen (immutable context)
+function getCustomerInquiry(lead: InboundLead | null | undefined): {
+  text: string;
+  senderName: string;
+  senderHandle: string | null;
+  time: string;
+  isOutreach: boolean;
+} {
+  if (!lead) {
+    return {
+      text: "",
+      senderName: "",
+      senderHandle: null,
+      time: "",
+      isOutreach: false,
+    };
+  }
+
+  const senderDisplay =
+    lead.senderName && lead.senderName !== "Prospek Tanpa Nama"
+      ? lead.senderName
+      : lead.senderHandle || lead.externalSenderId || "Calon Pelanggan";
+
+  // 1. Initial inquiry dari metadata (preservasi abadi)
+  if (lead.metadata?.initialInquiry) {
+    return {
+      text: lead.metadata.initialInquiry,
+      senderName: senderDisplay,
+      senderHandle: lead.senderHandle || null,
+      time: lead.firstContactAt || lead.createdAt,
+      isOutreach: false,
+    };
+  }
+
+  // 2. Preservasi inbound dalam notes
+  if (lead.notes) {
+    try {
+      const parsed = JSON.parse(lead.notes);
+      if (Array.isArray(parsed)) {
+        const inboundEntry = parsed.find(
+          (n: any) => n.direction === "inbound" || n.type === "chat"
+        );
+        if (inboundEntry && inboundEntry.text) {
+          return {
+            text: inboundEntry.text,
+            senderName: inboundEntry.author || senderDisplay,
+            senderHandle: lead.senderHandle || null,
+            time: inboundEntry.createdAt || lead.firstContactAt,
+            isOutreach: false,
+          };
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Cek apakah outbound message (dikirim oleh tim admin)
+  const isOutreach = isTeamInitiatedOutreach(lead);
+
+  return {
+    text: lead.lastMessage || "",
+    senderName: isOutreach ? "Tim Anda (Akun Bisnis)" : senderDisplay,
+    senderHandle: isOutreach ? null : (lead.senderHandle || null),
+    time: lead.lastContactAt || lead.firstContactAt || lead.createdAt,
+    isOutreach,
+  };
+}
+
+// Mendapatkan seluruh riwayat balasan tim dari notes (kronologis)
+function getLeadReplies(lead: InboundLead | null | undefined): LeadNote[] {
+  if (!lead) return [];
+  let replies: LeadNote[] = [];
+  if (lead.notes) {
+    try {
+      const parsed = JSON.parse(lead.notes);
+      if (Array.isArray(parsed)) {
+        replies = parsed.filter(
+          (n: any) => n.type === "reply" || n.direction === "outbound"
+        );
+      }
+    } catch {}
+  }
+
+  // Jika ada pesan awal customer (inbound) dan pesan terakhir adalah outbound oleh tim,
+  // namun belum tercatat di notes, sintesiskan pesan outbound tersebut ke riwayat respon tim
+  const hasInboundInquiry = Boolean(
+    lead.metadata?.initialInquiry ||
+    (lead.notes && (() => {
+      try {
+        const p = JSON.parse(lead.notes);
+        return Array.isArray(p) && p.some((n: any) => n.direction === 'inbound' || n.type === 'chat');
+      } catch { return false; }
+    })())
+  );
+
+  if (hasInboundInquiry && isLatestMessageOutbound(lead) && lead.lastMessage && replies.length === 0) {
+    replies = [
+      {
+        id: `reply_last_${lead.id}`,
+        author: "Tim Anda",
+        type: "reply",
+        direction: "outbound",
+        channel: lead.platform,
+        text: lead.lastMessage,
+        createdAt: lead.lastContactAt || lead.createdAt,
+      },
+    ];
+  }
+
+  return replies;
+}
+
+// Mengecek apakah terdapat pertanyaan/inquiry dari customer yang tercatat di database
+function hasCustomerInquirySaved(lead: InboundLead | null | undefined): boolean {
+  if (!lead) return false;
+  if (lead.metadata?.initialInquiry) return true;
+  if (lead.notes) {
+    try {
+      const parsed = JSON.parse(lead.notes);
+      if (
+        Array.isArray(parsed) &&
+        parsed.some(
+          (n: any) =>
+            (n.direction === 'inbound' || n.type === 'chat') &&
+            !isLatestMessageOutbound({
+              ...lead,
+              lastMessage: n.text,
+              lastMessageDirection: undefined,
+            })
+        )
+      ) {
+        return true;
+      }
+    } catch {}
+  }
+  // Jika pesan terakhir bukan teks pesan admin
+  if (lead.lastMessage && !isLatestMessageOutbound(lead)) {
+    return true;
+  }
+  return false;
+}
+
+// Mendapatkan seluruh alur percakapan (Thread History) secara runtut kronologis
+function getConversationThread(lead: InboundLead | null | undefined): LeadNote[] {
+  if (!lead) return [];
+  let notes: LeadNote[] = [];
+  if (lead.notes) {
+    try {
+      const parsed = JSON.parse(lead.notes);
+      if (Array.isArray(parsed)) {
+        notes = parsed.filter(
+          (n: any) =>
+            n.type === "chat" ||
+            n.type === "reply" ||
+            n.direction === "inbound" ||
+            n.direction === "outbound",
+        );
+      }
+    } catch {}
+  }
+
+  // Jika notes kosong tapi terdapat initialInquiry atau lastMessage
+  if (notes.length === 0) {
+    if (lead.metadata?.initialInquiry) {
+      notes.push({
+        id: `inquiry_${lead.id}`,
+        author: lead.senderHandle || lead.senderName || "Prospek",
+        type: "chat",
+        direction: "inbound",
+        text: lead.metadata.initialInquiry,
+        createdAt: lead.firstContactAt || lead.createdAt,
+      });
+    }
+
+    if (lead.lastMessage) {
+      const isOut = isLatestMessageOutbound(lead);
+      if (
+        lead.metadata?.initialInquiry &&
+        lead.metadata.initialInquiry !== lead.lastMessage &&
+        isOut
+      ) {
+        notes.push({
+          id: `last_${lead.id}`,
+          author: "Tim Anda",
+          type: "reply",
+          direction: "outbound",
+          text: lead.lastMessage,
+          createdAt: lead.lastContactAt || lead.createdAt,
+        });
+      } else if (!lead.metadata?.initialInquiry) {
+        notes.push({
+          id: `single_${lead.id}`,
+          author: isOut
+            ? "Tim Anda"
+            : lead.senderHandle || lead.senderName || "Prospek",
+          type: isOut ? "reply" : "chat",
+          direction: isOut ? "outbound" : "inbound",
+          text: lead.lastMessage,
+          createdAt: isOut
+            ? lead.lastContactAt || lead.createdAt
+            : lead.firstContactAt || lead.createdAt,
+        });
+      }
+    }
+  }
+
+  // Urutkan kronologis dari pesan terlama ke terbaru
+  return notes.sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
   );
 }
 
@@ -489,13 +782,12 @@ export default function LeadsPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [selectedPlatform, setSelectedPlatform] = useState<string>("all");
-  const [selectedStatus, setSelectedStatus] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedLead, setSelectedLead] = useState<InboundLead | null>(null);
 
   // View Switcher (Kanban vs Table) & Follow-up Filter
   const [viewMode, setViewMode] = useState<"kanban" | "table">("kanban");
   const [filterDueToday, setFilterDueToday] = useState(false);
-  const [contactFilter, setContactFilter] = useState<"all" | "uncontacted" | "contacted">("all");
 
   // Debounce search input untuk sinkronisasi data latar belakang tanpa memblokir UI
   useEffect(() => {
@@ -515,6 +807,48 @@ export default function LeadsPage() {
   const [isSavingDetails, setIsSavingDetails] = useState(false);
   const [newNoteText, setNewNoteText] = useState("");
   const [submittingNote, setSubmittingNote] = useState(false);
+
+  // In-App Omni-Channel Chat Composer State
+  const [replyMessage, setReplyMessage] = useState("");
+  const [isSendingReply, setIsSendingReply] = useState(false);
+  const [replyFeedback, setReplyFeedback] = useState<{
+    type: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
+
+  // Dynamic Meta 24-Hour Policy Window calculation
+  const isWithin24Hours = useMemo(() => {
+    if (!selectedLead) return false;
+    // Meta 24-Hour policy berlaku jika ada pesan masuk dari prospek (Inbound)
+    if (isTeamInitiatedOutreach(selectedLead)) return false;
+    const inquiry = getCustomerInquiry(selectedLead);
+    const rawTime = inquiry.time || selectedLead.firstContactAt || selectedLead.lastContactAt;
+    const d = parseUtcDate(rawTime);
+    if (!d) return false;
+    const diffHours = (Date.now() - d.getTime()) / (1000 * 60 * 60);
+    return diffHours >= 0 && diffHours <= 24;
+  }, [selectedLead]);
+
+  const selectedLeadInquiry = useMemo(
+    () => getCustomerInquiry(selectedLead),
+    [selectedLead],
+  );
+  const selectedLeadReplies = useMemo(
+    () => getLeadReplies(selectedLead),
+    [selectedLead],
+  );
+  const selectedLeadPlatMeta = useMemo(
+    () => (selectedLead ? getPlatformMeta(selectedLead.platform) : null),
+    [selectedLead],
+  );
+  const selectedLeadThread = useMemo(
+    () => getConversationThread(selectedLead),
+    [selectedLead],
+  );
+  const selectedLeadHasInquiry = useMemo(
+    () => hasCustomerInquirySaved(selectedLead),
+    [selectedLead],
+  );
 
   // Modal State Tambah Lead Manual
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -556,6 +890,8 @@ export default function LeadsPage() {
           : "",
       );
       setNewNoteText("");
+      setReplyMessage("");
+      setReplyFeedback(null);
     }
   }, [selectedLead?.id]);
 
@@ -573,8 +909,6 @@ export default function LeadsPage() {
         if (currentProject?.id) params.set("projectId", currentProject.id);
         if (selectedPlatform && selectedPlatform !== "all")
           params.set("platform", selectedPlatform);
-        if (selectedStatus && selectedStatus !== "all")
-          params.set("status", selectedStatus);
         if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
 
         const res = await fetch(`/api/composio/leads?${params.toString()}`);
@@ -593,7 +927,7 @@ export default function LeadsPage() {
         setIsSearching(false);
       }
     },
-    [currentProject?.id, selectedPlatform, selectedStatus, debouncedSearch],
+    [currentProject?.id, selectedPlatform, debouncedSearch],
   );
 
   useEffect(() => {
@@ -831,6 +1165,169 @@ export default function LeadsPage() {
     }
   };
 
+  // In-App Omni-Channel Reply Dispatcher (Direct API & Smart App Fallback)
+  const handleSendReply = async (directSend: boolean) => {
+    if (!selectedLead || !replyMessage.trim() || isSendingReply) return;
+    const msgToSend = replyMessage.trim();
+    setIsSendingReply(true);
+    setReplyFeedback(null);
+
+    // If dispatching via App (Deep Link):
+    if (!directSend) {
+      if (selectedLead.platform === "whatsapp") {
+        const cleanPhone = selectedLead.externalSenderId.replace(/[^0-9]/g, "");
+        const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msgToSend)}`;
+        window.open(waUrl, "_blank", "noopener,noreferrer");
+      } else if (selectedLead.platform === "gmail") {
+        const email = selectedLead.senderHandle || selectedLead.externalSenderId;
+        const mailUrl = `mailto:${email}?subject=${encodeURIComponent("Tindak Lanjut Firenalytics")}&body=${encodeURIComponent(msgToSend)}`;
+        window.open(mailUrl, "_blank", "noopener,noreferrer");
+      } else {
+        // Instagram / Facebook / Web: copy text to clipboard and open deep link
+        try {
+          if (typeof navigator !== "undefined" && navigator.clipboard) {
+            await navigator.clipboard.writeText(msgToSend);
+            setReplyFeedback({
+              type: "info",
+              message: "Teks balasan telah disalin ke clipboard! Mengalihkan ke obrolan...",
+            });
+          }
+        } catch {
+          // ignore clipboard errors
+        }
+        const appUrl = getChatLink(selectedLead);
+        window.open(appUrl, "_blank", "noopener,noreferrer");
+      }
+    }
+
+    try {
+      const res = await fetch(`/api/composio/leads/${selectedLead.id}/reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: msgToSend,
+          directSend: directSend,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (data.success) {
+        setReplyMessage("");
+        const successMsg = directSend
+          ? "Balasan berhasil dikirim langsung ke customer!"
+          : "Pesan terisi & riwayat outbound berhasil dicatat.";
+        setReplyFeedback({ type: "success", message: successMsg });
+        showNotification("success", successMsg);
+
+        // Optimistic update of selectedLead & leads state
+        let meta: any = {};
+        if (data.data) {
+          try {
+            meta = data.data.raw_metadata
+              ? JSON.parse(data.data.raw_metadata)
+              : selectedLead.metadata || {};
+          } catch {
+            meta = selectedLead.metadata || {};
+          }
+        } else {
+          meta = { ...(selectedLead.metadata || {}) };
+          if (
+            !meta.initialInquiry &&
+            selectedLead.lastMessage &&
+            selectedLead.lastMessageDirection !== "outbound"
+          ) {
+            meta.initialInquiry = selectedLead.lastMessage;
+          }
+        }
+
+        let fallbackNotes = selectedLead.notes;
+        if (!data.data) {
+          let existingNotes: LeadNote[] = [];
+          try {
+            if (selectedLead.notes) existingNotes = JSON.parse(selectedLead.notes);
+            if (!Array.isArray(existingNotes)) existingNotes = [];
+          } catch {
+            existingNotes = [];
+          }
+
+          const hasInbound = existingNotes.some((n) => n.direction === "inbound" || n.type === "chat");
+          if (!hasInbound && selectedLead.lastMessage && selectedLead.lastMessageDirection !== "outbound") {
+            existingNotes.push({
+              id: `inbound_${selectedLead.id}`,
+              author: selectedLead.senderHandle || selectedLead.senderName || "Customer",
+              type: "chat",
+              text: selectedLead.lastMessage,
+              direction: "inbound",
+              createdAt: selectedLead.firstContactAt || selectedLead.createdAt,
+            });
+          }
+
+          existingNotes.unshift({
+            id: `reply_${Date.now()}`,
+            author: "Saya",
+            type: "reply",
+            text: msgToSend,
+            direction: "outbound",
+            channel: selectedLead.platform,
+            apiSent: directSend,
+            createdAt: new Date().toISOString(),
+          });
+          fallbackNotes = JSON.stringify(existingNotes);
+        }
+
+        const updatedLead: InboundLead = data.data
+          ? {
+              id: data.data.id,
+              projectId: data.data.project_id || selectedLead.projectId,
+              userId: data.data.user_id || selectedLead.userId,
+              connectionId: data.data.connection_id,
+              platform: data.data.platform,
+              externalSenderId: data.data.external_sender_id,
+              senderName: data.data.sender_name,
+              senderHandle: data.data.sender_handle,
+              lastMessage: data.data.last_message,
+              threadId: data.data.thread_id,
+              status: data.data.status,
+              dealValue: data.data.deal_value,
+              nextFollowUpAt: data.data.next_follow_up_at,
+              notes: data.data.notes,
+              sourceAttribution: data.data.source_attribution,
+              unread: Boolean(data.data.unread),
+              lastMessageDirection: data.data.last_message_direction || "outbound",
+              metadata: meta,
+              firstContactAt: data.data.first_contact_at,
+              lastContactAt: data.data.last_contact_at,
+              createdAt: data.data.created_at,
+            }
+          : {
+              ...selectedLead,
+              lastMessage: msgToSend,
+              lastMessageDirection: "outbound",
+              status: selectedLead.status === "NEW" ? "CONTACTED" : selectedLead.status,
+              unread: false,
+              notes: fallbackNotes,
+              metadata: meta,
+              lastContactAt: new Date().toISOString(),
+            };
+
+        setSelectedLead(updatedLead);
+        setLeads((prev) =>
+          prev.map((item) => (item.id === selectedLead.id ? updatedLead : item)),
+        );
+      } else {
+        const errorMsg = data.error || "Gagal memproses balasan";
+        setReplyFeedback({ type: "error", message: errorMsg });
+        showNotification("error", errorMsg);
+      }
+    } catch (err: any) {
+      const errorMsg = err.message || "Terjadi kesalahan jaringan";
+      setReplyFeedback({ type: "error", message: errorMsg });
+      showNotification("error", errorMsg);
+    } finally {
+      setIsSendingReply(false);
+    }
+  };
+
   // Save Deal Value & Follow-Up Date in Detail Modal
   const handleSaveLeadCrmDetails = async (leadId: string) => {
     try {
@@ -874,15 +1371,19 @@ export default function LeadsPage() {
   const filteredLeads = useMemo(() => {
     let result = leads;
 
-    // Filter Pemisahan Cerdas: Belum Dihubungi vs Sudah Dihubungi
-    if (contactFilter === "uncontacted") {
+    // Filter Status Terpadu (Unified Status Segmented Filter)
+    if (statusFilter === "uncontacted") {
       result = result.filter(
         (l) => l.status === "NEW" && !isOutboundLeadMessage(l),
       );
-    } else if (contactFilter === "contacted") {
+    } else if (statusFilter === "contacted") {
       result = result.filter(
-        (l) => l.status !== "NEW" || isOutboundLeadMessage(l),
+        (l) => l.status === "CONTACTED" || isOutboundLeadMessage(l),
       );
+    } else if (statusFilter === "LOST") {
+      result = result.filter((l) => l.status === "LOST" || l.status === "SPAM");
+    } else if (statusFilter !== "all") {
+      result = result.filter((l) => l.status === statusFilter);
     }
 
     // Filter Tugas Follow-up Hari Ini
@@ -916,7 +1417,7 @@ export default function LeadsPage() {
     }
 
     return result;
-  }, [leads, filterDueToday, searchQuery, contactFilter]);
+  }, [leads, filterDueToday, searchQuery, statusFilter]);
 
   // Export to CSV
   const handleExportCsv = () => {
@@ -1085,124 +1586,179 @@ export default function LeadsPage() {
 
       {/* Baris 2: Micro Filters & Search (Quick Contact Segments + Status Filter + Search Bar) */}
       <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 pt-3 border-t border-zinc-100">
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
-          {/* Quick Contact Filter Segments: Belum Dihubungi vs Sudah Dihubungi */}
-          <div className="flex items-center p-0.5 rounded-lg border border-zinc-200 bg-zinc-100 text-[11px] shrink-0">
+        <div className="flex items-center gap-2 overflow-x-auto scrollbar-none">
+          {/* Unified Status Segmented Control */}
+          <div className="h-9 flex items-center p-0.5 rounded-lg border border-zinc-200 bg-zinc-100 text-[11px] shrink-0 shadow-2xs">
+            {/* Tab: Semua */}
             <button
               type="button"
-              onClick={() => setContactFilter("all")}
-              className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                contactFilter === "all"
+              onClick={() => setStatusFilter("all")}
+              className={`h-full flex items-center gap-1.5 px-3 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
+                statusFilter === "all"
                   ? "bg-white text-zinc-900 shadow-2xs font-semibold"
-                  : "text-zinc-600 hover:text-zinc-900"
+                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
               }`}
             >
-              Semua
+              <span>Semua</span>
+              <span
+                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
+                  statusFilter === "all"
+                    ? "bg-zinc-900 text-white"
+                    : "bg-zinc-200 text-zinc-700"
+                }`}
+              >
+                {leads.length}
+              </span>
             </button>
+
+            {/* Tab: Belum Dihubungi */}
             <button
               type="button"
-              onClick={() => setContactFilter("uncontacted")}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all cursor-pointer font-medium ${
-                contactFilter === "uncontacted"
-                  ? "bg-amber-500 text-white shadow-2xs font-bold"
-                  : "text-amber-800 hover:bg-amber-100/70"
+              onClick={() => setStatusFilter("uncontacted")}
+              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
+                statusFilter === "uncontacted"
+                  ? "bg-white text-amber-900 shadow-2xs font-semibold"
+                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
               }`}
-              title="Tampilkan hanya prospek yang belum pernah dihubungi"
+              title="Tampilkan hanya prospek baru yang belum pernah dihubungi"
             >
-              <Clock className="w-3 h-3" />
+              <Clock className="w-3 h-3 text-amber-600 shrink-0" />
               <span>Belum Dihubungi</span>
               <span
-                className={`px-1.5 py-0.2 rounded-full text-[9.5px] font-mono ${
-                  contactFilter === "uncontacted"
-                    ? "bg-amber-600 text-white"
-                    : "bg-amber-200/80 text-amber-900 font-semibold"
+                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
+                  statusFilter === "uncontacted"
+                    ? "bg-amber-600 text-white font-bold"
+                    : "bg-amber-100 text-amber-800 font-semibold"
                 }`}
               >
                 {uncontactedCount}
               </span>
             </button>
+
+            {/* Tab: Sudah Dihubungi */}
             <button
               type="button"
-              onClick={() => setContactFilter("contacted")}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all cursor-pointer font-medium ${
-                contactFilter === "contacted"
-                  ? "bg-blue-600 text-white shadow-2xs font-bold"
-                  : "text-blue-800 hover:bg-blue-100/70"
+              onClick={() => setStatusFilter("contacted")}
+              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
+                statusFilter === "contacted"
+                  ? "bg-white text-blue-900 shadow-2xs font-semibold"
+                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
               }`}
-              title="Tampilkan prospek yang sudah dihubungi / dalam proses pipeline"
+              title="Tampilkan prospek yang sedang dalam komunikasi / outreach aktif"
             >
-              <CheckCircle2 className="w-3 h-3" />
+              <CheckCircle2 className="w-3 h-3 text-blue-600 shrink-0" />
               <span>Sudah Dihubungi</span>
               <span
-                className={`px-1.5 py-0.2 rounded-full text-[9.5px] font-mono ${
-                  contactFilter === "contacted"
-                    ? "bg-blue-700 text-white"
-                    : "bg-blue-100 text-blue-900 font-semibold"
+                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
+                  statusFilter === "contacted"
+                    ? "bg-blue-600 text-white font-bold"
+                    : "bg-blue-100 text-blue-800 font-semibold"
                 }`}
               >
                 {contactedCount}
               </span>
             </button>
-          </div>
 
-          <div className="hidden sm:block w-px h-5 bg-zinc-200 shrink-0" />
-
-          {/* Granular Status Filter Pills */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="text-xs text-zinc-400 font-medium mr-1 flex items-center gap-1 shrink-0">
-              <Filter className="w-3.5 h-3.5" />
-              Status:
-            </span>
+            {/* Tab: Kualifikasi */}
             <button
               type="button"
-              onClick={() => setSelectedStatus("all")}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors shrink-0 cursor-pointer ${
-                selectedStatus === "all"
-                  ? "bg-zinc-800 text-white"
-                  : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+              onClick={() => setStatusFilter("QUALIFIED")}
+              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
+                statusFilter === "QUALIFIED"
+                  ? "bg-white text-purple-900 shadow-2xs font-semibold"
+                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
               }`}
+              title="Tahap kualifikasi kebutuhan & anggaran"
             >
-              Semua
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />
+              <span>Kualifikasi</span>
+              <span
+                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
+                  statusFilter === "QUALIFIED"
+                    ? "bg-purple-600 text-white font-bold"
+                    : "bg-purple-100 text-purple-800 font-semibold"
+                }`}
+              >
+                {stats.byStatus?.QUALIFIED || 0}
+              </span>
             </button>
-            {(
-              [
-                "NEW",
-                "CONTACTED",
-                "QUALIFIED",
-                "NEGOTIATION",
-                "CONVERTED",
-                "LOST",
-                "SPAM",
-              ] as LeadStatus[]
-            ).map((st) => {
-              const meta = getStatusMeta(st);
-              const isSelected = selectedStatus === st;
-              const count = stats.byStatus?.[st] || 0;
 
-              return (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={() => setSelectedStatus(st)}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 border shrink-0 cursor-pointer ${
-                    isSelected
-                      ? "border-zinc-800 bg-zinc-800 text-white"
-                      : `${meta.badgeClass} hover:opacity-80`
-                  }`}
-                >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full ${isSelected ? "bg-white" : meta.dotClass}`}
-                  />
-                  <span>{meta.label}</span>
-                  <span className="opacity-80 text-[10px]">({count})</span>
-                </button>
-              );
-            })}
+            {/* Tab: Negosiasi */}
+            <button
+              type="button"
+              onClick={() => setStatusFilter("NEGOTIATION")}
+              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
+                statusFilter === "NEGOTIATION"
+                  ? "bg-white text-amber-900 shadow-2xs font-semibold"
+                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
+              }`}
+              title="Tahap negosiasi penawaran harga & proposal"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+              <span>Negosiasi</span>
+              <span
+                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
+                  statusFilter === "NEGOTIATION"
+                    ? "bg-amber-600 text-white font-bold"
+                    : "bg-amber-100 text-amber-800 font-semibold"
+                }`}
+              >
+                {stats.byStatus?.NEGOTIATION || 0}
+              </span>
+            </button>
+
+            {/* Tab: Deal / Won */}
+            <button
+              type="button"
+              onClick={() => setStatusFilter("CONVERTED")}
+              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
+                statusFilter === "CONVERTED"
+                  ? "bg-white text-emerald-900 shadow-2xs font-semibold"
+                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
+              }`}
+              title="Prospek berhasil closing / deal"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+              <span>Deal</span>
+              <span
+                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
+                  statusFilter === "CONVERTED"
+                    ? "bg-emerald-600 text-white font-bold"
+                    : "bg-emerald-100 text-emerald-800 font-semibold"
+                }`}
+              >
+                {stats.byStatus?.CONVERTED || 0}
+              </span>
+            </button>
+
+            {/* Tab: Lost / Batal */}
+            <button
+              type="button"
+              onClick={() => setStatusFilter("LOST")}
+              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
+                statusFilter === "LOST"
+                  ? "bg-white text-zinc-900 shadow-2xs font-semibold"
+                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
+              }`}
+              title="Prospek batal atau ditandai spam"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 shrink-0" />
+              <span>Lost</span>
+              <span
+                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
+                  statusFilter === "LOST"
+                    ? "bg-zinc-800 text-white font-bold"
+                    : "bg-zinc-200 text-zinc-700 font-semibold"
+                }`}
+              >
+                {(stats.byStatus?.LOST || 0) + (stats.byStatus?.SPAM || 0)}
+              </span>
+            </button>
           </div>
         </div>
 
         {/* Search Bar with Silent Background Indicator */}
-        <div className="relative min-w-[200px] sm:min-w-[260px] shrink-0">
+        <div className="relative min-w-[200px] sm:min-w-[260px] shrink-0 h-9">
           {isSearching ? (
             <RefreshCw className="w-3.5 h-3.5 text-blue-500 animate-spin absolute left-3 top-1/2 -translate-y-1/2" />
           ) : (
@@ -1213,13 +1769,13 @@ export default function LeadsPage() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Cari nama, handle, atau pesan..."
-            className="w-full pl-8 pr-7 py-1.5 text-xs rounded-lg border border-zinc-200 bg-zinc-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 transition-colors"
+            className="w-full h-9 pl-9 pr-8 text-xs rounded-lg border border-zinc-200 bg-zinc-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 transition-colors shadow-2xs"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={() => setSearchQuery("")}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer p-0.5"
               title="Hapus pencarian"
             >
               <X className="w-3 h-3" />
@@ -2243,7 +2799,7 @@ export default function LeadsPage() {
       {/* Detail Modal & CRM Sales Activity Timeline */}
       {selectedLead && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/40 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-xl rounded-2xl border border-zinc-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white w-full max-w-2xl rounded-2xl border border-zinc-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Header */}
             <div className="p-5 border-b border-zinc-200 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -2285,63 +2841,306 @@ export default function LeadsPage() {
               </button>
             </div>
 
-            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
-              {/* Message Box */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
-                  <label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-                    Isi Pesan Terakhir
-                  </label>
-                  {isOutboundLeadMessage(selectedLead) ? (
-                    <span
-                      className="text-[11px] text-blue-700 flex items-center gap-1.5 bg-blue-50 px-2.5 py-0.5 rounded-md border border-blue-200 font-medium"
-                      title={`Pesan dikirim oleh akun internal tim Anda: ${formatLocalDateTime(selectedLead.lastContactAt || selectedLead.firstContactAt)}`}
-                    >
-                      <ArrowUpRight className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                      <span>
-                        Dikirim oleh Tim (Menunggu Respon) •{" "}
-                        {formatRelativeTime(
-                          selectedLead.lastContactAt ||
-                            selectedLead.firstContactAt,
-                        )}{" "}
-                        (
-                        {formatLocalDateTime(
-                          selectedLead.lastContactAt ||
-                            selectedLead.firstContactAt,
-                        )}
-                        )
-                      </span>
+            <div className="p-5 space-y-4 max-h-[78vh] overflow-y-auto text-xs">
+              {/* CARD 1 & 2: Percakapan & Balas Chat Langsung (Unified Conversation Thread & Quick Reply Console) */}
+              <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden shadow-2xs">
+                {/* Header Percakapan */}
+                <div className="p-3.5 bg-zinc-50/90 border-b border-zinc-200 flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="w-4 h-4 text-zinc-900 shrink-0" />
+                    <span className="font-semibold text-zinc-900 text-xs">
+                      Percakapan & Balas Chat Langsung
                     </span>
-                  ) : (
                     <span
-                      className="text-[11px] text-zinc-500 flex items-center gap-1 bg-zinc-100 px-2 py-0.5 rounded-md border border-zinc-200"
-                      title={`Pesan diterima dari prospek: ${formatLocalDateTime(selectedLead.lastContactAt || selectedLead.firstContactAt)}`}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                        selectedLeadHasInquiry
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          : "bg-amber-50 text-amber-700 border-amber-200"
+                      }`}
                     >
-                      <Clock className="w-3 h-3 text-zinc-400" />
-                      <span>
-                        Diterima{" "}
-                        {formatRelativeTime(
-                          selectedLead.lastContactAt ||
-                            selectedLead.firstContactAt,
-                        )}{" "}
-                        (
-                        {formatLocalDateTime(
-                          selectedLead.lastContactAt ||
-                            selectedLead.firstContactAt,
-                        )}
-                        )
-                      </span>
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          selectedLeadHasInquiry ? "bg-emerald-500" : "bg-amber-500"
+                        }`}
+                      />
+                      {selectedLeadHasInquiry
+                        ? `Konteks Prospek Tersimpan (${selectedLeadThread.length} pesan)`
+                        : "Perlu Cek Riwayat Lengkap"}
                     </span>
-                  )}
+                  </div>
+
+                  {/* Policy & Status Badges */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {selectedLead.platform === "instagram" || selectedLead.platform === "facebook" ? (
+                      isWithin24Hours ? (
+                        <span
+                          className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+                          title="Pesan pelanggan diterima kurang dari 24 jam lalu. Pengiriman langsung via Meta API aktif."
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          Jendela 24 Jam Meta Aktif (API Siap)
+                        </span>
+                      ) : !selectedLeadHasInquiry ? (
+                        <span
+                          className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200"
+                          title="Prospek belum membalas pesan outreach tim Anda. Disarankan gunakan tombol 'Buka Chat di Platform'."
+                        >
+                          <AlertTriangle className="w-3 h-3 text-amber-600" />
+                          Menunggu Balasan Prospek (Gunakan via App)
+                        </span>
+                      ) : (
+                        <span
+                          className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200"
+                          title="Lebih dari 24 jam sejak pesan pelanggan terakhir. Kebijakan Meta membatasi API langsung; disarankan gunakan tombol 'Buka Chat di Platform'."
+                        >
+                          <AlertTriangle className="w-3 h-3 text-amber-600" />
+                          Lewat 24 Jam Meta (Disarankan via App)
+                        </span>
+                      )
+                    ) : selectedLead.platform === "whatsapp" ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        WhatsApp Direct Dispatch
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-zinc-100 text-zinc-600 border border-zinc-200">
+                        Multi-Channel Dispatch
+                      </span>
+                    )}
+
+                    {/* Platform Badge */}
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-zinc-100 text-zinc-700 border border-zinc-200">
+                      <span className={selectedLeadPlatMeta?.textColor}>{selectedLeadPlatMeta?.icon}</span>
+                      <span>{selectedLeadPlatMeta?.name}</span>
+                    </span>
+                  </div>
                 </div>
-                <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 text-zinc-800 whitespace-pre-wrap leading-relaxed">
-                  {isOutboundLeadMessage(selectedLead) && (
-                    <div className="text-[11px] font-semibold text-blue-600 mb-1.5 flex items-center gap-1">
-                      <ArrowUpRight className="w-3.5 h-3.5 text-blue-500" />
-                      <span>Pesan Terakhir Dikirim dari Akun Ini (Outbound):</span>
+
+                {/* Body: Thread Messages & Context Alert */}
+                <div className="p-4 space-y-3.5 bg-zinc-50/40">
+                  {/* Context Guard Banner: Muncul jika pertanyaan awal belum tersimpan di CRM */}
+                  {!selectedLeadHasInquiry ? (
+                    <div className="p-3 rounded-lg bg-amber-50/90 border border-amber-200 text-amber-900 space-y-2 shadow-2xs">
+                      <div className="flex items-start gap-2.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-xs text-amber-900">
+                            Pertanyaan Awal Prospek Belum Tersimpan di CRM
+                          </p>
+                          <p className="text-[11px] text-amber-800 leading-relaxed mt-0.5">
+                            Data lokal CRM mencatat pesan terakhir berasal dari akun tim Anda. Agar admin tidak kehilangan konteks pertanyaan atau kebutuhan awal customer sebelum membalas, silakan baca obrolan aslinya langsung di aplikasi resmi.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 pt-1.5 border-t border-amber-200/70 flex-wrap">
+                        <a
+                          href={getChatLink(selectedLead)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-medium text-[11px] transition-colors cursor-pointer shadow-2xs"
+                        >
+                          <ExternalLink className="w-3 h-3 text-white" />
+                          <span>Buka Riwayat Lengkap di {selectedLeadPlatMeta?.name} ↗</span>
+                        </a>
+                        <span className="text-[10px] text-amber-700">
+                          Riwayat multi-pesan otomatis tersimpan utuh pada sinkronisasi pesan baru berikutnya.
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Blue Informational Banner jika pesan pembuka dikirim ke prospek (Outreach) */
+                    selectedLeadInquiry.isOutreach && (
+                      <div className="p-2.5 rounded-lg bg-blue-50/80 border border-blue-200 text-blue-900 flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <ArrowUpRight className="w-4 h-4 text-blue-600 shrink-0" />
+                          <span className="text-[11px] font-medium text-blue-900">
+                            Pesan pembuka dikirim oleh tim Anda ke {selectedLead.senderHandle || selectedLead.senderName}
+                          </span>
+                        </div>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-medium border border-blue-200">
+                          Menunggu Respon Prospek
+                        </span>
+                      </div>
+                    )
+                  )}
+
+                  {/* Thread Viewport */}
+                  <div className="space-y-3 max-h-56 overflow-y-auto pr-1">
+                    {/* Placeholder pesan customer jika belum tersimpan */}
+                    {!selectedLeadHasInquiry && (
+                      <div className="flex items-start gap-2.5 max-w-[85%]">
+                        <div className="w-7 h-7 rounded-full bg-zinc-200 text-zinc-500 flex items-center justify-center shrink-0 text-[10px] font-medium border border-zinc-300">
+                          {getInitials(selectedLead.senderHandle || selectedLead.senderName || "Prospek")}
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-white border border-dashed border-zinc-300 text-zinc-500 text-[11px] italic leading-relaxed">
+                          Pertanyaan awal customer tidak terekam saat sinkronisasi awal. Klik tombol di atas untuk melihat riwayat obrolan di {selectedLeadPlatMeta?.name}.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Mapping Chronological Thread Messages */}
+                    {selectedLeadThread.map((msg, idx) => {
+                      const isOut = msg.direction === 'outbound' || msg.type === 'reply';
+                      return (
+                        <div
+                          key={msg.id || idx}
+                          className={`flex items-start gap-2.5 ${isOut ? 'justify-end' : 'justify-start'}`}
+                        >
+                          {!isOut && (
+                            <div
+                              className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 text-[10px] font-semibold uppercase border ${getAvatarColor(
+                                msg.author || selectedLead.senderHandle || "Prospek"
+                              )}`}
+                            >
+                              {getInitials(msg.author || selectedLead.senderHandle)}
+                            </div>
+                          )}
+
+                          <div className={`space-y-1 max-w-[82%] ${isOut ? 'items-end text-right' : 'items-start text-left'}`}>
+                            <div className={`flex items-center gap-1.5 text-[10px] text-zinc-400 ${isOut ? 'justify-end' : 'justify-start'}`}>
+                              {isOut ? (
+                                <>
+                                  <span className="px-1.5 py-0.2 rounded bg-blue-50 text-blue-700 border border-blue-200 font-medium text-[9px]">
+                                    {msg.apiSent ? 'via API' : 'Outreach Tim'}
+                                  </span>
+                                  <span>•</span>
+                                  <span>{formatRelativeTime(msg.createdAt)}</span>
+                                  <span>•</span>
+                                  <span className="font-semibold text-zinc-800">Tim Anda</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="font-semibold text-zinc-800">
+                                    {msg.author || selectedLead.senderHandle || selectedLead.senderName || "Prospek"}
+                                  </span>
+                                  {selectedLead.senderHandle && (
+                                    <span className="font-mono text-zinc-400">
+                                      {selectedLead.senderHandle.startsWith('@') ? selectedLead.senderHandle : `@${selectedLead.senderHandle}`}
+                                    </span>
+                                  )}
+                                  <span>•</span>
+                                  <span>{formatRelativeTime(msg.createdAt)}</span>
+                                </>
+                              )}
+                            </div>
+
+                            <div
+                              className={`p-3 rounded-xl text-xs leading-relaxed whitespace-pre-wrap ${
+                                isOut
+                                  ? 'bg-zinc-900 text-white border border-zinc-800 shadow-2xs rounded-tr-xs'
+                                  : 'bg-white text-zinc-800 border border-zinc-200/90 shadow-2xs rounded-tl-xs'
+                              }`}
+                            >
+                              {msg.text}
+                            </div>
+
+                            {isOut && (
+                              <div className="flex items-center justify-end gap-1 text-[10px] text-zinc-400">
+                                <ArrowUpRight className="w-3 h-3 text-blue-500" />
+                                <span>Pesan Terkirim dari Akun Anda</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {isOut && (
+                            <div className="w-7 h-7 rounded-full bg-zinc-900 text-white flex items-center justify-center shrink-0 text-[10px] font-semibold border border-zinc-800">
+                              T
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Quick Reply Template Chips */}
+                <div className="px-3.5 py-2 bg-zinc-50 border-t border-b border-zinc-200 flex items-center flex-wrap gap-1.5">
+                  <span className="text-[10px] text-zinc-500 font-medium flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-amber-500" />
+                    Template Balas:
+                  </span>
+                  {QUICK_REPLY_TEMPLATES.map((tmpl) => (
+                    <button
+                      key={tmpl.label}
+                      type="button"
+                      onClick={() => setReplyMessage(tmpl.text)}
+                      className="text-[10px] px-2 py-0.5 rounded-md bg-white hover:bg-zinc-100 text-zinc-700 border border-zinc-200 transition-colors cursor-pointer shadow-2xs"
+                    >
+                      {tmpl.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Composer Textarea & Action Buttons */}
+                <div className="p-3.5 bg-white space-y-2.5">
+                  <div className="relative">
+                    <textarea
+                      rows={2}
+                      value={replyMessage}
+                      onChange={(e) => setReplyMessage(e.target.value)}
+                      placeholder={`Ketik balasan untuk ${
+                        selectedLead.senderHandle ||
+                        selectedLead.senderName ||
+                        "prospek"
+                      }...`}
+                      className="w-full px-3 py-2 text-xs rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 resize-none leading-relaxed"
+                    />
+                  </div>
+
+                  {replyFeedback && (
+                    <div
+                      className={`p-2 rounded-lg text-xs flex items-center gap-2 ${
+                        replyFeedback.type === "success"
+                          ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                          : replyFeedback.type === "error"
+                          ? "bg-red-50 text-red-800 border border-red-200"
+                          : "bg-blue-50 text-blue-800 border border-blue-200"
+                      }`}
+                    >
+                      {replyFeedback.type === "success" ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      ) : replyFeedback.type === "error" ? (
+                        <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                      ) : (
+                        <Sparkles className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                      )}
+                      <span>{replyFeedback.message}</span>
                     </div>
                   )}
-                  {selectedLead.lastMessage || "Tidak ada pesan teks tercatat."}
+
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-[10px] text-zinc-400">
+                      {replyMessage.length > 0
+                        ? `${replyMessage.length} karakter`
+                        : "Pilih template cepat di atas atau ketik langsung balasan"}
+                    </span>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={isSendingReply || !replyMessage.trim()}
+                        onClick={() => handleSendReply(false)}
+                        className="px-3.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-white text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        title={`Buka aplikasi ${selectedLeadPlatMeta?.name || 'resmi'} dengan pesan otomatis terisi dan catat status kontak ke CRM`}
+                      >
+                        <ExternalLink className="w-3 h-3 text-zinc-300" />
+                        <span>Kirim via App (Terisi Otomatis)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={isSendingReply || !replyMessage.trim()}
+                        onClick={() => handleSendReply(true)}
+                        className="px-3 py-1.5 rounded-lg border border-zinc-300 bg-white hover:bg-zinc-50 text-zinc-700 text-xs font-medium transition-colors disabled:opacity-50 flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                        title="Kirim pesan langsung ke inbox pelanggan menggunakan API integrasi"
+                      >
+                        <Send className="w-3 h-3 text-zinc-500" />
+                        <span>
+                          {isSendingReply ? "Mengirim..." : "Kirim Langsung (API)"}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -2466,7 +3265,13 @@ export default function LeadsPage() {
                         if (!selectedLead.notes) return 0;
                         try {
                           const p = JSON.parse(selectedLead.notes);
-                          return Array.isArray(p) ? p.length : 1;
+                          return Array.isArray(p)
+                            ? p.filter(
+                                (n: any) =>
+                                  n.type !== "reply" &&
+                                  n.direction !== "inbound",
+                              ).length
+                            : 1;
                         } catch {
                           return 1;
                         }
@@ -2525,7 +3330,11 @@ export default function LeadsPage() {
                       try {
                         const parsed = JSON.parse(selectedLead.notes);
                         if (Array.isArray(parsed)) {
-                          notesList = parsed;
+                          notesList = parsed.filter(
+                            (n: any) =>
+                              n.type !== "reply" &&
+                              n.direction !== "inbound",
+                          );
                         } else {
                           notesList = [
                             {
@@ -2638,7 +3447,7 @@ export default function LeadsPage() {
                   onClick={() => handleOpenChat(selectedLead)}
                   className="px-4 py-1.5 rounded-lg bg-zinc-900 text-white text-xs font-medium hover:bg-zinc-800 flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
                 >
-                  <span>Buka Chat Langsung</span>
+                  <span>Buka Chat di {selectedLeadPlatMeta?.name || "App"}</span>
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
               </div>

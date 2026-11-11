@@ -27,6 +27,10 @@ import {
   Share2,
   FileText,
   Building2,
+  MessageSquare,
+  Send,
+  Radio,
+  CheckCircle2,
 } from "lucide-react";
 import { useProject } from "@/context/ProjectContext";
 
@@ -200,6 +204,74 @@ export default function ProjectsPage() {
     type: "success" | "error";
     text: string;
   } | null>(null);
+
+  // Webhook Integration & Simulation State
+  const [copiedWebhookUrl, setCopiedWebhookUrl] = useState(false);
+  const [copiedVerifyToken, setCopiedVerifyToken] = useState(false);
+  const [copiedFormUrl, setCopiedFormUrl] = useState(false);
+  const [simulatingWebhook, setSimulatingWebhook] = useState(false);
+  const [simPlatform, setSimPlatform] = useState<"instagram" | "whatsapp" | "website">("instagram");
+  const [simSenderName, setSimSenderName] = useState("");
+  const [simSenderHandle, setSimSenderHandle] = useState("");
+  const [simMessage, setSimMessage] = useState("Halo min, mau tanya info layanan dan harga untuk bisnis kami?");
+  const [simFeedback, setSimFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const handleSimulateWebhook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProject || !simMessage.trim()) return;
+    try {
+      setSimulatingWebhook(true);
+      setSimFeedback(null);
+      const res = await fetch("/api/webhooks/test-simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: selectedProject.id,
+          platform: simPlatform,
+          senderName: simSenderName.trim() || undefined,
+          senderHandle: simSenderHandle.trim() || undefined,
+          messageText: simMessage.trim(),
+        }),
+      });
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = {
+          error:
+            res.status === 404
+              ? "Endpoint webhook tidak ditemukan di server. Pastikan server backend sedang berjalan."
+              : res.status === 502
+              ? "Server backend (port 5000) sedang offline. Pastikan backend diaktifkan via './start-dev.sh'."
+              : `Gagal memproses respon server (Status HTTP ${res.status}).`,
+        };
+      }
+
+      if (res.ok && data?.success) {
+        setSimFeedback({
+          type: "success",
+          text: `Sukses! Pesan simulasi berhasil diterima oleh Webhook Engine dan dicatat ke CRM (${data.data?.sender || "prospek"}). Buka menu Leads & Pesan Masuk untuk melihatnya.`,
+        });
+        setSimMessage("");
+      } else {
+        setSimFeedback({
+          type: "error",
+          text:
+            data?.error ||
+            (res.status === 502
+              ? "Server backend (port 5000) sedang offline. Pastikan './start-dev.sh' sedang berjalan."
+              : `Gagal mengirim simulasi webhook (Status HTTP ${res.status}).`),
+        });
+      }
+    } catch (err: any) {
+      setSimFeedback({
+        type: "error",
+        text: err.message || "Terjadi kesalahan jaringan saat simulasi.",
+      });
+    } finally {
+      setSimulatingWebhook(false);
+    }
+  };
 
   // 1. Fetch Projects
   const fetchProjects = useCallback(async () => {
@@ -1166,6 +1238,257 @@ export default function ProjectsPage() {
               );
             })}
           </div>
+        </div>
+      </div>
+
+      {/* Container Card: Webhook Real-Time Meta & WhatsApp (Pesan Masuk Otomatis) */}
+      <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h2 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+              <Radio className="w-4 h-4 text-emerald-600 animate-pulse" />
+              <span>Integrasi Webhook Real-Time (Meta &amp; WhatsApp)</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
+                Baru • Otomatis
+              </span>
+            </h2>
+            <p className="text-xs text-zinc-500">
+              Tangkap pesan masuk dari Instagram DM, WhatsApp Business Cloud API, Messenger, atau formulir web seketika tanpa perlu menekan tombol sinkronkan manual.
+            </p>
+          </div>
+
+          {selectedProject && (
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-zinc-100 border border-zinc-200 text-xs">
+              <Building2 className="w-3.5 h-3.5 text-zinc-500" />
+              <span className="text-zinc-500 font-medium">Workspace Tujuan:</span>
+              <span className="font-bold text-zinc-900">{selectedProject.name}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Info Grid: Callback URL & Secret Token */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-zinc-700 flex items-center gap-1.5">
+                <Globe className="w-3.5 h-3.5 text-zinc-500" />
+                <span>Meta Callback URL (Instagram &amp; WhatsApp)</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText("https://traffic-analytics-api.fireup-dist.workers.dev/api/webhooks/meta");
+                  setCopiedWebhookUrl(true);
+                  setTimeout(() => setCopiedWebhookUrl(false), 2000);
+                }}
+                className="text-[11px] text-zinc-600 hover:text-zinc-900 flex items-center gap-1 cursor-pointer font-medium"
+              >
+                {copiedWebhookUrl ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-600" />
+                    <span className="text-emerald-700">Tersalin!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3 text-zinc-500" />
+                    <span>Salin URL</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <code className="text-xs font-mono text-zinc-800 bg-white px-2.5 py-2 rounded-lg border border-zinc-200 block break-all select-all">
+              https://traffic-analytics-api.fireup-dist.workers.dev/api/webhooks/meta
+            </code>
+            <p className="text-[11px] text-zinc-500 leading-relaxed">
+              Masukkan URL ini di menu <strong>Webhooks</strong> pada Meta for Developers (Facebook Developers Console).
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-zinc-700 flex items-center gap-1.5">
+                <Key className="w-3.5 h-3.5 text-zinc-500" />
+                <span>Verify Token (Verifikasi Rahasia)</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText("firenalytics_meta_webhook_secret");
+                  setCopiedVerifyToken(true);
+                  setTimeout(() => setCopiedVerifyToken(false), 2000);
+                }}
+                className="text-[11px] text-zinc-600 hover:text-zinc-900 flex items-center gap-1 cursor-pointer font-medium"
+              >
+                {copiedVerifyToken ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-600" />
+                    <span className="text-emerald-700">Tersalin!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3 text-zinc-500" />
+                    <span>Salin Token</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <code className="text-xs font-mono text-zinc-800 bg-white px-2.5 py-2 rounded-lg border border-zinc-200 block break-all select-all font-bold">
+              firenalytics_meta_webhook_secret
+            </code>
+            <p className="text-[11px] text-zinc-500 leading-relaxed">
+              Token verifikasi untuk validasi handshake saat menekan tombol &quot;Verify and Save&quot; di Meta.
+            </p>
+          </div>
+        </div>
+
+        {/* Box: Formulir Webhook Landing Page Universal */}
+        <div className="p-4 rounded-xl bg-indigo-50/50 border border-indigo-100 space-y-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+              <FileText className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Universal Web Form / Landing Page Ingestion Endpoint</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard.writeText("https://traffic-analytics-api.fireup-dist.workers.dev/api/webhooks/leads");
+                setCopiedFormUrl(true);
+                setTimeout(() => setCopiedFormUrl(false), 2000);
+              }}
+              className="text-[11px] text-indigo-700 hover:text-indigo-900 flex items-center gap-1 cursor-pointer font-medium"
+            >
+              {copiedFormUrl ? (
+                <>
+                  <Check className="w-3 h-3 text-emerald-600" />
+                  <span className="text-emerald-700">Tersalin!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3 h-3 text-indigo-500" />
+                  <span>Salin Endpoint Form</span>
+                </>
+              )}
+            </button>
+          </div>
+          <code className="text-xs font-mono text-indigo-900 bg-white/80 px-2.5 py-1.5 rounded-lg border border-indigo-200 block break-all select-all">
+            POST https://traffic-analytics-api.fireup-dist.workers.dev/api/webhooks/leads
+          </code>
+          <p className="text-[11px] text-indigo-900/80 leading-relaxed">
+            Kirim data JSON formulir (misal: WordPress Contact Form 7, Typeform, atau custom HTML form) dengan format: <code className="font-mono bg-white px-1 py-0.5 rounded text-[10px]">&#123;&quot;projectId&quot;: &quot;{selectedProject?.id || 'prj_default'}&quot;, &quot;name&quot;: &quot;...&quot;, &quot;phone&quot;: &quot;...&quot;, &quot;message&quot;: &quot;...&quot;&#125;</code>.
+          </p>
+        </div>
+
+        {/* Interactive Webhook Simulator */}
+        <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200 space-y-3.5">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <span className="text-xs font-bold text-zinc-900 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+              <span>Simulasi Uji Coba Webhook Real-Time (Test Simulator)</span>
+            </span>
+            <span className="text-[10px] text-zinc-500">
+              Kirim pesan uji coba untuk memverifikasi alur penerimaan leads seketika ke CRM
+            </span>
+          </div>
+
+          {simFeedback && (
+            <div
+              className={`p-3 rounded-lg text-xs font-medium border flex items-center gap-2 ${
+                simFeedback.type === "success"
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+                  : "bg-rose-50 border-rose-200 text-rose-800"
+              }`}
+            >
+              {simFeedback.type === "success" ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              )}
+              <span>{simFeedback.text}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSimulateWebhook} className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-[11px] font-semibold text-zinc-700 block mb-1">
+                  Kanal Simulasi
+                </label>
+                <select
+                  value={simPlatform}
+                  onChange={(e) => setSimPlatform(e.target.value as any)}
+                  className="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900 cursor-pointer"
+                >
+                  <option value="instagram">Instagram DM</option>
+                  <option value="whatsapp">WhatsApp Business</option>
+                  <option value="website">Formulir Website</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-zinc-700 block mb-1">
+                  Nama Pengirim
+                </label>
+                <input
+                  type="text"
+                  value={simSenderName}
+                  onChange={(e) => setSimSenderName(e.target.value)}
+                  placeholder={simPlatform === 'whatsapp' ? 'Budi Santoso' : 'Rian Pratama'}
+                  className="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900"
+                />
+              </div>
+
+              <div>
+                <label className="text-[11px] font-semibold text-zinc-700 block mb-1">
+                  Handle / Nomor HP
+                </label>
+                <input
+                  type="text"
+                  value={simSenderHandle}
+                  onChange={(e) => setSimSenderHandle(e.target.value)}
+                  placeholder={simPlatform === 'whatsapp' ? '+6281298765432' : '@rian_simulasi'}
+                  className="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900 font-mono"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-semibold text-zinc-700 block mb-1">
+                Pesan Chat Masuk
+              </label>
+              <input
+                type="text"
+                required
+                value={simMessage}
+                onChange={(e) => setSimMessage(e.target.value)}
+                placeholder="Ketik teks pesan pertanyaan customer..."
+                className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900"
+              />
+            </div>
+
+            <div className="flex items-center justify-between pt-1 flex-wrap gap-2">
+              <span className="text-[11px] text-zinc-400">
+                Pesan ini akan langsung masuk ke tabel <code className="font-mono">inbound_leads</code> dan terlihat di halaman Leads.
+              </span>
+
+              <button
+                type="submit"
+                disabled={simulatingWebhook || !simMessage.trim()}
+                className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium text-xs rounded-lg shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                {simulatingWebhook ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Mengirim Simulasi...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Kirim Simulasi Webhook</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
 

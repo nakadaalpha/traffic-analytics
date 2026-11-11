@@ -250,7 +250,7 @@ export async function ensureSocialTables(db: D1Database) {
 /**
  * Helper to extract the authenticated user from JWT cookie or Authorization header.
  */
-async function extractUser(c: any): Promise<{ id: string; username: string; email: string } | null> {
+export async function extractUser(c: any): Promise<{ id: string; username: string; email: string } | null> {
   try {
     const token =
       getCookie(c, 'auth_token') ||
@@ -1929,7 +1929,18 @@ composioRouter.get('/leads', async (c) => {
           row.last_message.toLowerCase().includes('dari tim gflowps') ||
           row.last_message.toLowerCase().includes('kenalin aku dari tim') ||
           row.last_message.toLowerCase().includes('kenalin kami dari tim') ||
-          row.last_message.toLowerCase().includes('tim fireup')
+          row.last_message.toLowerCase().includes('tim fireup') ||
+          row.last_message.toLowerCase().includes('di tunggu kabar baik') ||
+          row.last_message.toLowerCase().includes('ditunggu kabar baik') ||
+          row.last_message.toLowerCase().includes('ada yang bisa di bantu') ||
+          row.last_message.toLowerCase().includes('ada yang bisa dibantu') ||
+          row.last_message.toLowerCase().includes('terima kasih telah menghubungi') ||
+          row.last_message.toLowerCase().includes('halo kak, terima kasih') ||
+          row.last_message.toLowerCase().includes('hallo kak, terima kasih') ||
+          row.last_message.toLowerCase().includes('siap kak') ||
+          row.last_message.toLowerCase().includes('baik kak') ||
+          row.last_message.toLowerCase().includes('okei kak') ||
+          row.last_message.toLowerCase().includes('oke kak')
         ));
 
       // Otomatis pisahkan prospek outreach yang sudah dikirimi pesan ke status 'CONTACTED'
@@ -1981,7 +1992,18 @@ composioRouter.get('/leads', async (c) => {
           lowerMsg.includes('dari tim gflowps') ||
           lowerMsg.includes('kenalin aku dari tim') ||
           lowerMsg.includes('kenalin kami dari tim') ||
-          lowerMsg.includes('tim fireup')
+          lowerMsg.includes('tim fireup') ||
+          lowerMsg.includes('di tunggu kabar baik') ||
+          lowerMsg.includes('ditunggu kabar baik') ||
+          lowerMsg.includes('ada yang bisa di bantu') ||
+          lowerMsg.includes('ada yang bisa dibantu') ||
+          lowerMsg.includes('terima kasih telah menghubungi') ||
+          lowerMsg.includes('halo kak, terima kasih') ||
+          lowerMsg.includes('hallo kak, terima kasih') ||
+          lowerMsg.includes('siap kak') ||
+          lowerMsg.includes('baik kak') ||
+          lowerMsg.includes('okei kak') ||
+          lowerMsg.includes('oke kak')
         ) {
           direction = 'outbound';
         }
@@ -2268,6 +2290,49 @@ composioRouter.post('/leads/sync', async (c) => {
                     candidateMsg = conv.snippet.trim();
                   }
 
+                  // Ekstrak riwayat lengkap pesan (Thread History) dan preservasi pesan awal customer
+                  const threadNotes: any[] = [];
+                  let customerInitialInquiry: string | null = null;
+                  let customerInquiryTime: string | null = null;
+
+                  // sortedMsgs: dari terbaru ke terlama
+                  // Urutkan terlama ke terbaru untuk menyusun riwayat percakapan yang kronologis
+                  const chronologicalMsgs = [...sortedMsgs].reverse();
+                  for (const m of chronologicalMsgs) {
+                    const content = extractMessageContent(m);
+                    if (!content) continue;
+
+                    const senderId = m.from?.id ? String(m.from.id) : '';
+                    const senderUser = (m.from?.username || '').toLowerCase();
+                    const isFromPartner = Boolean(
+                      (partnerId && senderId && senderId === partnerId) ||
+                      (partnerUser && senderUser && senderUser === partnerUser)
+                    );
+
+                    const dir: 'inbound' | 'outbound' = isFromPartner ? 'inbound' : 'outbound';
+                    const authorName = isFromPartner ? (sHandle || sName) : 'Tim Anda';
+
+                    threadNotes.unshift({
+                      id: m.id || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                      author: authorName,
+                      type: dir === 'inbound' ? 'chat' : 'reply',
+                      direction: dir,
+                      text: content,
+                      createdAt: m.created_time ? formatIsoUtc(m.created_time) : new Date().toISOString(),
+                    });
+
+                    if (isFromPartner && !customerInitialInquiry) {
+                      customerInitialInquiry = content;
+                      customerInquiryTime = m.created_time ? formatIsoUtc(m.created_time) : null;
+                    }
+                  }
+
+                  // Fallback: jika customerInitialInquiry belum terisi tapi partnerMsgObj ada
+                  if (!customerInitialInquiry && partnerMsgObj) {
+                    customerInitialInquiry = extractMessageContent(partnerMsgObj);
+                    customerInquiryTime = partnerMsgObj.created_time ? formatIsoUtc(partnerMsgObj.created_time) : null;
+                  }
+
                   const lastMsg = candidateMsg || `Percakapan DM Instagram dari ${sName}`;
                   // Prioritas timestamp riil: waktu pengiriman pesan lawan bicara / pesan terakhir -> updated_time percakapan
                   const effectiveTime = rawMsgTime || (msgs.length > 0 ? msgs[0]?.created_time : null) || conv.updated_time;
@@ -2280,12 +2345,23 @@ composioRouter.post('/leads/sync', async (c) => {
 
                   const initialStatus = messageDirection === 'outbound' ? 'CONTACTED' : 'NEW';
 
+                  const metaPayload: any = {
+                    partner,
+                    unreadCount: conv.unread_count,
+                    lastMessagePreview: lastMsg,
+                    messageCreatedAt: effectiveTime || null,
+                    direction: messageDirection,
+                  };
+                  if (customerInitialInquiry) {
+                    metaPayload.initialInquiry = customerInitialInquiry;
+                  }
+
                   await c.env.DB.prepare(
                     `INSERT INTO inbound_leads (
                       id, project_id, user_id, connection_id, platform, external_sender_id,
                       sender_name, sender_handle, last_message, thread_id, status, source_attribution,
-                      unread, last_message_direction, raw_metadata, first_contact_at, last_contact_at, created_at
-                    ) VALUES (?, ?, ?, ?, 'instagram', ?, ?, ?, ?, ?, ?, 'bio_link', ?, ?, ?, ?, ?, datetime('now'))
+                      unread, last_message_direction, raw_metadata, notes, first_contact_at, last_contact_at, created_at
+                    ) VALUES (?, ?, ?, ?, 'instagram', ?, ?, ?, ?, ?, ?, 'bio_link', ?, ?, ?, ?, ?, ?, datetime('now'))
                     ON CONFLICT(project_id, platform, external_sender_id) DO UPDATE SET
                       last_message = CASE 
                         WHEN excluded.last_message IS NOT NULL 
@@ -2305,12 +2381,17 @@ composioRouter.post('/leads/sync', async (c) => {
                         THEN 'CONTACTED'
                         ELSE inbound_leads.status
                       END,
+                      notes = CASE 
+                        WHEN excluded.notes IS NOT NULL AND excluded.notes != '[]' THEN excluded.notes 
+                        ELSE inbound_leads.notes 
+                      END,
+                      raw_metadata = excluded.raw_metadata,
                       unread = excluded.unread;`
                   ).bind(
                     leadId, effectiveProjectId, user.id, conn.id, partner.id || sHandle,
                     sName, sHandle, lastMsg, conv.id || null, initialStatus, isUnread, messageDirection,
-                    JSON.stringify({ partner, unreadCount: conv.unread_count, lastMessagePreview: lastMsg, messageCreatedAt: effectiveTime || null, direction: messageDirection }),
-                    lastTime, lastTime
+                    JSON.stringify(metaPayload), JSON.stringify(threadNotes),
+                    customerInquiryTime || lastTime, lastTime
                   ).run();
                   syncedCount++;
                 }
@@ -2561,6 +2642,216 @@ composioRouter.patch('/leads/:id', async (c) => {
   } catch (err: any) {
     console.error('[Patch Lead Error]', err.message);
     return c.json({ success: false, error: err.message || 'Gagal memperbarui prospek' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/composio/leads/:id/reply
+// Sends an in-app reply via Composio API or logs an outbound app dispatch
+// -------------------------------------------------------------
+composioRouter.post('/leads/:id/reply', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  const leadId = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const replyMessage = String(body.message || '').trim();
+  const directSend = Boolean(body.directSend);
+
+  if (!replyMessage) {
+    return c.json({ success: false, error: 'Isi balasan tidak boleh kosong' }, 400);
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    const lead: any = await c.env.DB.prepare(
+      'SELECT * FROM inbound_leads WHERE id = ? AND user_id = ? LIMIT 1;'
+    )
+      .bind(leadId, user.id)
+      .first();
+
+    if (!lead) {
+      return c.json({ success: false, error: 'Prospek tidak ditemukan' }, 404);
+    }
+
+    let apiSent = false;
+    let directSendError: string | null = null;
+
+    if (directSend) {
+      // Attempt sending via Composio / Platform API
+      try {
+        let composio = null;
+        if (c.env.COMPOSIO_API_KEY) {
+          composio = getComposioClient(c.env.COMPOSIO_API_KEY);
+        }
+
+        if (composio) {
+          // Find matching connection
+          let conn: any = null;
+          if (lead.connection_id) {
+            conn = await c.env.DB.prepare(
+              'SELECT * FROM social_connections WHERE composio_connection_id = ? AND user_id = ? LIMIT 1;'
+            )
+              .bind(lead.connection_id, user.id)
+              .first();
+          }
+          if (!conn) {
+            conn = await c.env.DB.prepare(
+              'SELECT * FROM social_connections WHERE platform = ? AND user_id = ? AND status = \'ACTIVE\' LIMIT 1;'
+            )
+              .bind(lead.platform, user.id)
+              .first();
+          }
+
+          if (conn && conn.composio_connection_id) {
+            const plat = lead.platform.toLowerCase();
+            if (plat === 'instagram') {
+              const res: any = await composio.tools.execute('INSTAGRAM_SEND_DIRECT_MESSAGE', {
+                connectedAccountId: conn.composio_connection_id,
+                userId: conn.user_id,
+                arguments: {
+                  recipient_id: lead.external_sender_id,
+                  message: replyMessage,
+                },
+                version: '20261014_00',
+              }).catch((e: any) => ({ successful: false, error: e.message }));
+
+              if (res && res.successful !== false && !res.error && !res.data?.http_error) {
+                apiSent = true;
+              } else {
+                const msg = res?.error || res?.data?.message || 'Gagal mengirim langsung via Meta API';
+                directSendError = String(msg);
+                console.warn('[Chat Reply] Instagram API send note:', directSendError);
+              }
+            } else if (plat === 'gmail') {
+              const res: any = await composio.tools.execute('GMAIL_SEND_MESSAGE', {
+                connectedAccountId: conn.composio_connection_id,
+                userId: conn.user_id,
+                arguments: {
+                  to: lead.sender_handle || lead.external_sender_id,
+                  subject: `Re: Respon CRM Firenalytics`,
+                  body: replyMessage,
+                },
+              }).catch((e: any) => ({ successful: false, error: e.message }));
+
+              if (res && res.successful !== false && !res.error) {
+                apiSent = true;
+              } else {
+                directSendError = res?.error || 'Gagal mengirim email langsung';
+              }
+            } else {
+              directSendError = `Pengiriman API langsung belum didukung untuk platform ${lead.platform}. Pesan dicatat sebagai outbound dispatch.`;
+            }
+          } else {
+            directSendError = 'Koneksi akun platform aktif tidak ditemukan. Balasan dicatat ke riwayat prospek.';
+          }
+        } else {
+          directSendError = 'Composio API key belum terkonfigurasi. Balasan dicatat ke riwayat prospek.';
+        }
+      } catch (err: any) {
+        directSendError = err.message || 'Terjadi kendala saat menghubungi API platform';
+        console.warn('[Chat Reply Exception]', directSendError);
+      }
+    }
+
+    // Append outbound reply into notes JSON structure
+    let notesList: any[] = [];
+    if (lead.notes) {
+      try {
+        const parsed = JSON.parse(lead.notes);
+        if (Array.isArray(parsed)) {
+          notesList = parsed;
+        } else {
+          notesList = [{
+            id: 'n_prev',
+            author: 'Sistem',
+            text: lead.notes,
+            createdAt: lead.last_contact_at || new Date().toISOString(),
+          }];
+        }
+      } catch {
+        notesList = [{
+          id: 'n_prev',
+          author: 'Sistem',
+          text: lead.notes,
+          createdAt: lead.last_contact_at || new Date().toISOString(),
+        }];
+      }
+    }
+
+    // Preservasi pesan asli customer agar tidak hilang saat admin mengirim balasan
+    const hasInboundMessage = notesList.some((n: any) => n.direction === 'inbound');
+    if (!hasInboundMessage && lead.last_message && lead.last_message_direction !== 'outbound') {
+      notesList.push({
+        id: `inbound_${lead.id}`,
+        author: lead.sender_handle || lead.sender_name || 'Customer',
+        type: 'chat',
+        text: lead.last_message,
+        direction: 'inbound',
+        createdAt: lead.first_contact_at || lead.created_at || new Date().toISOString(),
+      });
+    }
+
+    const replyEntry = {
+      id: `reply_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 5)}`,
+      author: user.username || user.email || 'Admin',
+      type: 'reply',
+      text: replyMessage,
+      direction: 'outbound',
+      channel: lead.platform,
+      apiSent: apiSent,
+      createdAt: new Date().toISOString(),
+    };
+
+    notesList.unshift(replyEntry);
+
+    // Amankan pesan awal di raw_metadata
+    let metaObj: any = {};
+    if (lead.raw_metadata) {
+      try { metaObj = JSON.parse(lead.raw_metadata); } catch {}
+    }
+    if (!metaObj.initialInquiry && lead.last_message && lead.last_message_direction !== 'outbound') {
+      metaObj.initialInquiry = lead.last_message;
+    }
+
+    const nowIso = new Date().toISOString();
+    await c.env.DB.prepare(`
+      UPDATE inbound_leads 
+      SET last_message = ?,
+          last_message_direction = 'outbound',
+          status = CASE WHEN status = 'NEW' THEN 'CONTACTED' ELSE status END,
+          unread = 0,
+          raw_metadata = ?,
+          last_contact_at = ?,
+          notes = ?
+      WHERE id = ? AND user_id = ?;
+    `)
+      .bind(replyMessage, JSON.stringify(metaObj), nowIso, JSON.stringify(notesList), leadId, user.id)
+      .run();
+
+    const updatedLead: any = await c.env.DB.prepare(
+      'SELECT * FROM inbound_leads WHERE id = ? AND user_id = ? LIMIT 1;'
+    )
+      .bind(leadId, user.id)
+      .first();
+
+    return c.json({
+      success: true,
+      message: apiSent
+        ? 'Balasan berhasil terkirim langsung ke customer'
+        : (directSendError
+            ? `Pesan dicatat di riwayat internal (${directSendError})`
+            : 'Balasan berhasil dicatat di riwayat prospek'),
+      apiSent,
+      directSendError,
+      data: updatedLead,
+    });
+  } catch (err: any) {
+    console.error('[Leads Reply Error]', err.message);
+    return c.json({ success: false, error: err.message || 'Gagal memproses balasan pesan' }, 500);
   }
 });
 
