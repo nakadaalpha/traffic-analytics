@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "./start-dev.sh",
     "dev:live": "./start-dev-remote.sh",
+    "db:pull": "./pull-db.sh",
     "build": "npm run build --workspace=frontend",
     "build:frontend": "npm run build --workspace=frontend",
     "dev:backend": "npm run dev --workspace=backend",

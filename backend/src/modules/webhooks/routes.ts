@@ -156,6 +156,22 @@ webhookRouter.post('/meta', async (c) => {
           const senderId = String(item.sender?.id || '').trim();
           const recipientId = String(item.recipient?.id || '').trim();
 
+          // Native Read Status Sync: Detect read receipt from mobile Instagram app
+          if (item.read) {
+            const partnerId = (senderId === businessAccountId || senderId === connRow?.account_handle) ? recipientId : senderId;
+            if (partnerId) {
+              await markLeadAsReadByExternalSender(c.env.DB, {
+                projectId: effectiveProjectId,
+                platform: 'instagram',
+                externalSenderId: partnerId,
+                threadId: recipientId ? `t_${senderId}_${recipientId}` : null,
+                watermark: Number(item.read.watermark) || Date.now(),
+              });
+              processedCount++;
+            }
+            continue;
+          }
+
           // Skip messages sent by our own business account
           if (senderId === businessAccountId || senderId === connRow?.account_handle) {
             continue;
@@ -217,6 +233,7 @@ webhookRouter.post('/meta', async (c) => {
           const phoneNumberId = String(val.metadata?.phone_number_id || '').trim();
           const contacts = Array.isArray(val.contacts) ? val.contacts : [];
           const messages = Array.isArray(val.messages) ? val.messages : [];
+          const statuses = Array.isArray(val.statuses) ? val.statuses : [];
 
           // Match connection by phone number or platform
           let connRow: any = null;
@@ -242,6 +259,23 @@ webhookRouter.post('/meta', async (c) => {
             connRow?.user_id
           );
           const connectionId = connRow?.id || null;
+
+          // Native Read Status Sync: Process WhatsApp read receipts from native app
+          for (const st of statuses) {
+            if (st.status === 'read') {
+              const recipientPhone = String(st.recipient_id || '').trim();
+              if (recipientPhone) {
+                await markLeadAsReadByExternalSender(c.env.DB, {
+                  projectId: effectiveProjectId,
+                  platform: 'whatsapp',
+                  externalSenderId: recipientPhone,
+                  threadId: `wa_${recipientPhone}`,
+                  watermark: (Number(st.timestamp) * 1000) || Date.now(),
+                });
+                processedCount++;
+              }
+            }
+          }
 
           for (const m of messages) {
             const senderPhone = String(m.from || '').trim();
@@ -307,6 +341,24 @@ webhookRouter.post('/meta', async (c) => {
 
         for (const item of messagingList) {
           const senderId = String(item.sender?.id || '').trim();
+          const recipientId = String(item.recipient?.id || '').trim();
+
+          // Native Read Status Sync: Detect read receipt from Messenger
+          if (item.read) {
+            const partnerId = senderId === pageId ? recipientId : senderId;
+            if (partnerId) {
+              await markLeadAsReadByExternalSender(c.env.DB, {
+                projectId: effectiveProjectId,
+                platform: 'facebook',
+                externalSenderId: partnerId,
+                threadId: `fb_${partnerId}`,
+                watermark: Number(item.read.watermark) || Date.now(),
+              });
+              processedCount++;
+            }
+            continue;
+          }
+
           if (!senderId || senderId === pageId) continue;
 
           let messageText = '';
@@ -410,20 +462,106 @@ webhookRouter.post('/leads', async (c) => {
 });
 
 // -------------------------------------------------------------
+// POST /api/webhooks/tiktok (TikTok Lead Generation & Messaging Webhook)
+// Ingests real-time lead events from TikTok for Business Lead Ads or TikTok DM
+// -------------------------------------------------------------
+webhookRouter.post('/tiktok', async (c) => {
+  try {
+    await ensureSocialTables(c.env.DB);
+    const body: any = await c.req.json().catch(() => ({}));
+
+    // TikTok Lead Gen webhook delivers lead event data or test webhook
+    const leadId = String(body.lead_id || body.leadId || `tt_lead_${Date.now()}`);
+    const adId = body.ad_id || body.adId || null;
+    const formFields = Array.isArray(body.fields) ? body.fields : (body.form_data || []);
+
+    let senderName = String(body.name || body.senderName || 'Prospek Iklan TikTok').trim();
+    let senderPhone = String(body.phone || body.phone_number || '').trim();
+    let senderEmail = String(body.email || '').trim();
+    let messageText = String(body.message || body.messageText || '').trim();
+
+    // Parse standard TikTok Lead Gen form fields array: [{ field_key: 'NAME', field_value: '...' }, ...]
+    if (Array.isArray(formFields)) {
+      for (const field of formFields) {
+        const key = String(field.field_key || field.key || '').toUpperCase();
+        const val = String(field.field_value || field.value || '').trim();
+        if (key.includes('NAME') && val) senderName = val;
+        else if ((key.includes('PHONE') || key.includes('WHATSAPP') || key.includes('MOBILE')) && val) senderPhone = val;
+        else if (key.includes('EMAIL') && val) senderEmail = val;
+        else if (val) messageText += (messageText ? ` | ${key}: ${val}` : `${key}: ${val}`);
+      }
+    }
+
+    if (!messageText) {
+      messageText = 'Formulir Lead Generation TikTok terkirim (Tertarik dengan penawaran)';
+    }
+
+    const { projectId: effectiveProjectId, userId: effectiveUserId } = await resolveValidProjectAndUser(
+      c.env.DB,
+      body.projectId,
+      body.userId
+    );
+
+    const cleanPhone = senderPhone.replace(/[^0-9]/g, '');
+    const externalSenderId = cleanPhone || senderEmail || String(body.username || `@user_${leadId.slice(-6)}`);
+    const senderHandle = senderPhone ? `+${cleanPhone}` : (body.username ? (body.username.startsWith('@') ? body.username : `@${body.username}`) : senderEmail || externalSenderId);
+
+    const result = await ingestLeadEvent(c.env.DB, {
+      projectId: effectiveProjectId,
+      userId: effectiveUserId,
+      connectionId: null,
+      platform: 'tiktok',
+      externalSenderId,
+      senderName,
+      senderHandle,
+      messageText,
+      threadId: `tt_${leadId}`,
+      messageId: `tt_msg_${leadId}`,
+      sourceAttribution: adId ? `tiktok_ad_${adId}` : 'tiktok_lead_generation',
+    });
+
+    return c.json({
+      success: true,
+      message: 'TikTok lead event berhasil diterima dan disimpan di CRM!',
+      data: result,
+    }, 201);
+  } catch (err: any) {
+    console.error('[TikTok Webhook Error]', err.message);
+    return c.json({ success: false, error: err.message }, 500);
+  }
+});
+
+// -------------------------------------------------------------
 // POST /api/webhooks/test-simulate (Interactive Webhook Simulation)
-// Allows admins & developers to fire realistic mock Meta & WA webhooks
+// Allows admins & developers to fire realistic mock Meta, WA & TikTok webhooks,
+// including Inbound Messages and Native Read Status Receipts
 // -------------------------------------------------------------
 webhookRouter.post('/test-simulate', async (c) => {
   try {
     await ensureSocialTables(c.env.DB);
     const body: any = await c.req.json().catch(() => ({}));
 
+    const eventType = String(body.eventType || 'MESSAGE').toUpperCase();
     const platform = String(body.platform || 'instagram').toLowerCase();
     const projectId = String(body.projectId || '').trim() || null;
-    const senderName = String(body.senderName || (platform === 'whatsapp' ? 'Budi Pratama (Simulasi WA)' : 'Rian Santoso (Simulasi IG)')).trim();
-    const senderHandle = String(body.senderHandle || (platform === 'whatsapp' ? '+6281298765432' : '@rian_simulasi')).trim();
-    const messageText = String(body.messageText || 'Halo min, saya tertarik dengan layanan FireUp. Bisa minta pricelist dan jadwal diskusi?').trim();
-    const externalSenderId = String(body.externalSenderId || (platform === 'whatsapp' ? '6281298765432' : `sim_user_${Date.now().toString().slice(-6)}`)).trim();
+    const defaultSenderName = platform === 'whatsapp'
+      ? 'Budi Pratama (Simulasi WA)'
+      : platform === 'tiktok'
+        ? 'Citra TikTok Creator'
+        : 'Rian Santoso (Simulasi IG)';
+    const senderName = String(body.senderName || defaultSenderName).trim();
+    const defaultSenderHandle = platform === 'whatsapp'
+      ? '+6281298765432'
+      : platform === 'tiktok'
+        ? '@citra_creator'
+        : '@rian_simulasi';
+    const senderHandle = String(body.senderHandle || defaultSenderHandle).trim();
+    const defaultMessage = platform === 'tiktok'
+      ? 'Halo Kak! Saya lihat konten video TikTok Anda dan tertarik dengan layanannya. Ada info promo bulan ini?'
+      : 'Halo min, saya tertarik dengan layanan FireUp. Bisa minta pricelist dan jadwal diskusi?';
+    const messageText = String(body.messageText || defaultMessage).trim();
+    const rawExternalId = body.externalSenderId ? String(body.externalSenderId).trim() : '';
+    const externalSenderId = rawExternalId || (platform === 'whatsapp' ? '6281298765432' : (senderHandle.replace('@', '') || `sim_user_${Date.now().toString().slice(-6)}`));
 
     // Try extracting authenticated user from cookie/token or resolve valid project and user
     const authUser = await extractUser(c);
@@ -432,6 +570,51 @@ webhookRouter.post('/test-simulate', async (c) => {
       projectId,
       authUser?.id
     );
+
+    // If event is a Native Read Receipt (admin opened the chat in mobile app)
+    if (eventType === 'READ_RECEIPT') {
+      const markResult = await markLeadAsReadByExternalSender(c.env.DB, {
+        projectId: effectiveProjectId,
+        platform,
+        externalSenderId,
+        threadId: platform === 'whatsapp' ? `wa_${externalSenderId}` : null,
+        watermark: Date.now(),
+      });
+
+      if (!markResult.success) {
+        // If lead does not exist yet in CRM, create it and immediately mark as read
+        await ingestLeadEvent(c.env.DB, {
+          projectId: effectiveProjectId,
+          userId: effectiveUserId,
+          connectionId: null,
+          platform,
+          externalSenderId,
+          senderName,
+          senderHandle,
+          messageText: messageText || 'Pesan sebelumnya telah dibuka di aplikasi HP.',
+          threadId: platform === 'whatsapp' ? `wa_${externalSenderId}` : `sim_thread_${Date.now()}`,
+          messageId: `sim_msg_${Date.now()}`,
+          sourceAttribution: 'webhook_read_simulation',
+        });
+        await markLeadAsReadByExternalSender(c.env.DB, {
+          projectId: effectiveProjectId,
+          platform,
+          externalSenderId,
+          watermark: Date.now(),
+        });
+      }
+
+      return c.json({
+        success: true,
+        message: `Simulasi tanda baca (Native Read Receipt) untuk ${platform.toUpperCase()} berhasil disinkronkan! Status prospek di CRM telah diselaraskan menjadi 'Sudah Dibaca'.`,
+        data: {
+          action: 'MARKED_READ',
+          platform,
+          sender: senderHandle || senderName,
+          externalSenderId,
+        },
+      });
+    }
 
     const result = await ingestLeadEvent(c.env.DB, {
       projectId: effectiveProjectId,
@@ -442,7 +625,7 @@ webhookRouter.post('/test-simulate', async (c) => {
       senderName,
       senderHandle,
       messageText,
-      threadId: `sim_thread_${Date.now()}`,
+      threadId: platform === 'whatsapp' ? `wa_${externalSenderId}` : `sim_thread_${Date.now()}`,
       messageId: `sim_msg_${Date.now()}`,
       sourceAttribution: 'webhook_test_simulation',
     });
@@ -457,6 +640,77 @@ webhookRouter.post('/test-simulate', async (c) => {
     return c.json({ success: false, error: err.message }, 500);
   }
 });
+
+// -------------------------------------------------------------
+// Helper: Mark Lead as Read from Native Platform Event (Receipt Sync)
+// Synchronizes unread status when messages are opened on native mobile apps
+// -------------------------------------------------------------
+interface MarkReadPayload {
+  projectId: string;
+  platform: string;
+  externalSenderId: string;
+  threadId?: string | null;
+  watermark?: number;
+}
+
+async function markLeadAsReadByExternalSender(db: D1Database, p: MarkReadPayload) {
+  const nowIso = new Date().toISOString();
+  try {
+    const cleanExternalId = p.externalSenderId.trim();
+    const cleanPhoneNoPlus = cleanExternalId.replace(/^\+/, '');
+
+    const lead: any = await db.prepare(
+      `SELECT id, raw_metadata FROM inbound_leads 
+       WHERE project_id = ? AND platform = ? AND (
+         external_sender_id = ? 
+         OR external_sender_id = ?
+         OR external_sender_id = ?
+         OR thread_id = ? 
+         OR thread_id LIKE ?
+       )
+       LIMIT 1;`
+    )
+      .bind(
+        p.projectId,
+        p.platform,
+        cleanExternalId,
+        cleanPhoneNoPlus,
+        `+${cleanPhoneNoPlus}`,
+        p.threadId || '',
+        `%${cleanExternalId}%`
+      )
+      .first();
+
+    if (lead) {
+      let meta: any = {};
+      try {
+        meta = lead.raw_metadata ? JSON.parse(lead.raw_metadata) : {};
+      } catch {}
+
+      meta.unreadCount = 0;
+      meta.nativeReadSynced = true;
+      meta.nativeReadAt = nowIso;
+      if (p.watermark) meta.nativeReadWatermark = p.watermark;
+
+      await db.prepare(
+        `UPDATE inbound_leads 
+         SET unread = 0, 
+             raw_metadata = ?,
+             last_contact_at = ?
+         WHERE id = ?;`
+      )
+        .bind(JSON.stringify(meta), nowIso, lead.id)
+        .run();
+
+      return { success: true, leadId: lead.id, action: 'MARKED_READ' };
+    }
+
+    return { success: false, action: 'LEAD_NOT_FOUND' };
+  } catch (err: any) {
+    console.warn('[Mark Read Helper Warning]', err.message);
+    return { success: false, error: err.message };
+  }
+}
 
 // -------------------------------------------------------------
 // Helper: Core Ingestion Logic into Cloudflare D1

@@ -3,6 +3,7 @@ import { getCookie } from 'hono/cookie';
 import { verify } from 'hono/jwt';
 import { getComposioClient } from './client';
 import { handleSocialMediaSync, syncSocialPostsForConnection } from '../../jobs/socialSyncJob';
+import { mirrorThumbnailToR2 } from '../media/service';
 import {
   analyzeSentiment,
   analyzePostingPatterns,
@@ -12,6 +13,7 @@ import {
 export type ComposioEnv = {
   Bindings: {
     DB: D1Database;
+    MEDIA_BUCKET?: R2Bucket;
     JWT_SECRET?: string;
     COMPOSIO_API_KEY?: string;
   };
@@ -31,6 +33,23 @@ export function formatIsoUtc(dateStr: string | null | undefined): string | null 
     return s.endsWith('Z') || s.includes('+') ? s : `${s}Z`;
   }
   return `${s.replace(' ', 'T')}Z`;
+}
+
+/**
+ * Memeriksa apakah URL CDN Instagram bertanda tangan (&oe=...) telah kedaluwarsa.
+ * Parameter 'oe' adalah timestamp unix dalam format hexadecimal (detik).
+ */
+export function isInstagramUrlExpired(url: string | null | undefined): boolean {
+  if (!url) return true;
+  const match = url.match(/[?&]oe=([0-9a-fA-F]+)/);
+  if (!match) return false;
+  try {
+    const expSec = parseInt(match[1], 16);
+    const nowSec = Math.floor(Date.now() / 1000);
+    return expSec <= nowSec;
+  } catch {
+    return false;
+  }
 }
 
 let socialTablesInitialized = false;
@@ -286,6 +305,49 @@ export async function extractUser(c: any): Promise<{ id: string; username: strin
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolves a valid project_id that strictly exists in the database
+ * to satisfy SQLite foreign key constraints:
+ * FOREIGN KEY (project_id) REFERENCES projects(id)
+ */
+async function resolveValidProject(
+  db: D1Database,
+  preferredProjectId?: string | null,
+  userId?: string | null
+): Promise<string> {
+  // 1. Try finding the preferred project
+  if (preferredProjectId && preferredProjectId !== 'prj_default') {
+    const row: any = await db.prepare(
+      'SELECT id FROM projects WHERE id = ? LIMIT 1;'
+    ).bind(preferredProjectId).first();
+    if (row?.id) return row.id;
+  }
+
+  // 2. Try finding any project owned by the user
+  if (userId) {
+    const row: any = await db.prepare(
+      'SELECT id FROM projects WHERE owner_id = ? ORDER BY created_at ASC LIMIT 1;'
+    ).bind(userId).first();
+    if (row?.id) return row.id;
+  }
+
+  // 3. Fallback to any project in the database
+  const anyProject: any = await db.prepare(
+    'SELECT id FROM projects ORDER BY created_at ASC LIMIT 1;'
+  ).first();
+  if (anyProject?.id) return anyProject.id;
+
+  // 4. Guarantee project existence if table was empty
+  const fallbackProjectId = 'prj_default';
+  const validOwnerId = userId || 'usr_seed_epicerie';
+  await db.prepare(
+    `INSERT OR IGNORE INTO projects (id, name, owner_id, write_key, is_active)
+     VALUES (?, 'Default Workspace', ?, 'pk_live_default', 1);`
+  ).bind(fallbackProjectId, validOwnerId).run();
+
+  return fallbackProjectId;
 }
 
 // -------------------------------------------------------------
@@ -941,14 +1003,18 @@ composioRouter.post('/posts/sync', async (c) => {
 
     const body = await c.req.json().catch(() => ({}));
     const targetConnectionId = c.req.query('connectionId') || body.connectionId;
+    const targetProjectId = c.req.query('projectId') || body.projectId;
 
-    let query = `SELECT id, platform, account_handle, composio_connection_id, user_id 
+    let query = `SELECT id, platform, account_handle, composio_connection_id, user_id, project_id 
                  FROM social_connections 
                  WHERE user_id = ? AND status IN ('ACTIVE', 'INITIATED')`;
     const params: any[] = [user.id];
-    if (targetConnectionId) {
+    if (targetConnectionId && targetConnectionId !== 'all') {
       query += ` AND id = ?;`;
       params.push(targetConnectionId);
+    } else if (targetProjectId && targetProjectId !== 'all') {
+      query += ` AND (project_id = ? OR project_id IS NULL OR project_id = 'prj_default');`;
+      params.push(targetProjectId);
     } else {
       query += `;`;
     }
@@ -956,6 +1022,13 @@ composioRouter.post('/posts/sync', async (c) => {
     const { results: connections } = await c.env.DB.prepare(query)
       .bind(...params)
       .all<any>();
+
+    if (!connections || connections.length === 0) {
+      return c.json({
+        success: false,
+        error: 'Tidak ditemukan akun media sosial aktif di workspace ini. Silakan hubungkan akun di menu Manajemen & Integrasi.',
+      }, 404);
+    }
 
     let composio = null;
     if (c.env.COMPOSIO_API_KEY) {
@@ -966,20 +1039,294 @@ composioRouter.post('/posts/sync', async (c) => {
       }
     }
 
-    if (connections && connections.length > 0) {
-      for (const conn of connections) {
-        await syncSocialPostsForConnection(c.env, conn, composio, true);
+    let totalSynced = 0;
+    const warnings: string[] = [];
+
+    for (const conn of connections) {
+      const syncRes = await syncSocialPostsForConnection(c.env, conn, composio, true);
+      if (syncRes && syncRes.count) totalSynced += syncRes.count;
+      if (syncRes && syncRes.warning) warnings.push(syncRes.warning);
+
+      // Auto-heal: Segarkan thumbnail kadaluarsa untuk postingan lama Instagram dalam 1 panggilan batch efisien
+      if (conn.platform === 'instagram' && composio) {
+        try {
+          const { results: existingPosts } = await c.env.DB.prepare(
+            `SELECT id, platform_post_id, thumbnail_url FROM social_posts 
+             WHERE connection_id = ? 
+             ORDER BY published_at DESC 
+             LIMIT 100;`
+          ).bind(conn.id).all<any>();
+
+          if (existingPosts && existingPosts.length > 0) {
+            const needRefresh = existingPosts.filter((p: any) => isInstagramUrlExpired(p.thumbnail_url)).slice(0, 50);
+            if (needRefresh.length > 0) {
+              const objectIds = needRefresh.map((p: any) => p.platform_post_id);
+              const nodeRes: any = await composio.tools.execute('INSTAGRAM_GET_MULTIPLE_NODES', {
+                connectedAccountId: conn.composio_connection_id,
+                userId: conn.user_id,
+                arguments: {
+                  object_ids: objectIds,
+                  fields: 'id,thumbnail_url,media_url',
+                },
+              }).catch(() => null);
+
+              const objects = nodeRes?.data?.objects || {};
+              const updateStatements: any[] = [];
+              for (const post of needRefresh) {
+                const node = objects[post.platform_post_id];
+                let freshUrl = node?.media_url || node?.thumbnail_url;
+                if (freshUrl) {
+                  // Simpan permanen ke Cloudflare R2 jika tersedia
+                  if (c.env.MEDIA_BUCKET) {
+                    try {
+                      const r2Url = await mirrorThumbnailToR2(c.env, conn.platform, post.platform_post_id, freshUrl);
+                      if (r2Url) freshUrl = r2Url;
+                    } catch {}
+                  }
+                  updateStatements.push(
+                    c.env.DB.prepare(
+                      `UPDATE social_posts SET thumbnail_url = ?, last_synced_at = datetime('now') WHERE id = ?;`
+                    ).bind(freshUrl, post.id)
+                  );
+                }
+              }
+              if (updateStatements.length > 0) {
+                await c.env.DB.batch(updateStatements);
+                console.log(`[Posts Sync] Auto-healed ${updateStatements.length} expired thumbnails for ${conn.account_handle}`);
+              }
+            }
+          }
+        } catch (healErr: any) {
+          console.warn('[Posts Sync Auto-Heal Notice]:', healErr.message);
+        }
       }
+    }
+
+    // Jika terjadi penolakan dari API upstream (misal token expired) dan tidak ada konten baru terambil
+    if (warnings.length > 0 && totalSynced === 0) {
+      return c.json({
+        success: false,
+        error: warnings.join('; '),
+      }, 400);
     }
 
     return c.json({
       success: true,
-      message: 'Performa video dan postingan berhasil disinkronisasi',
+      message: totalSynced > 0
+        ? `Performa video dan postingan berhasil disinkronkan (${totalSynced} konten diproses).`
+        : 'Performa postingan telah diselaraskan dengan database.',
+      warning: warnings.length > 0 ? warnings.join('; ') : undefined,
     });
   } catch (err: any) {
     console.error('[Composio Posts Sync Error]', err.message);
     return c.json(
       { success: false, error: err.message || 'Gagal menyinkronkan postingan' },
+      500
+    );
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/composio/posts/:postId/refresh-thumbnail
+// Menyegarkan URL thumbnail/media yang kedaluwarsa untuk postingan spesifik (On-Demand)
+// -------------------------------------------------------------
+composioRouter.post('/posts/:postId/refresh-thumbnail', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json(
+      { success: false, error: 'Unauthorized: Sesi tidak ditemukan atau kedaluwarsa' },
+      401
+    );
+  }
+
+  const postId = c.req.param('postId');
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    // Cari postingan berdasarkan id internal atau platform_post_id
+    const post: any = await c.env.DB.prepare(
+      `SELECT p.id, p.connection_id, p.platform, p.platform_post_id, p.thumbnail_url, p.permalink,
+              c.composio_connection_id, c.account_handle, c.user_id
+       FROM social_posts p
+       JOIN social_connections c ON p.connection_id = c.id
+       WHERE (p.id = ? OR p.platform_post_id = ?) AND c.user_id = ?;`
+    )
+      .bind(postId, postId, user.id)
+      .first();
+
+    if (!post) {
+      return c.json({ success: false, error: 'Postingan tidak ditemukan' }, 404);
+    }
+
+    let freshThumbnailUrl: string | null = null;
+
+    if (post.platform === 'youtube') {
+      freshThumbnailUrl = `https://i.ytimg.com/vi/${post.platform_post_id}/hqdefault.jpg`;
+    } else if (post.platform === 'instagram') {
+      if (!c.env.COMPOSIO_API_KEY) {
+        return c.json({ success: false, error: 'COMPOSIO_API_KEY belum dikonfigurasi' }, 500);
+      }
+      const composio = getComposioClient(c.env.COMPOSIO_API_KEY);
+      const res: any = await composio.tools.execute('INSTAGRAM_GET_MULTIPLE_NODES', {
+        connectedAccountId: post.composio_connection_id,
+        userId: post.user_id,
+        arguments: {
+          object_ids: [post.platform_post_id],
+          fields: 'id,thumbnail_url,media_url,permalink,caption',
+        },
+      });
+
+      const node = res?.data?.objects?.[post.platform_post_id];
+      freshThumbnailUrl = node?.media_url || node?.thumbnail_url || null;
+    }
+
+    if (!freshThumbnailUrl) {
+      return c.json({ success: false, error: 'Gagal memperoleh URL media terbaru dari platform' }, 400);
+    }
+
+    // Simpan permanen ke Cloudflare R2 jika tersedia
+    if (c.env.MEDIA_BUCKET) {
+      try {
+        const r2Url = await mirrorThumbnailToR2(c.env, post.platform, post.platform_post_id, freshThumbnailUrl);
+        if (r2Url) freshThumbnailUrl = r2Url;
+      } catch (err: any) {
+        console.warn('[Refresh Thumbnail] R2 mirror notice:', err.message);
+      }
+    }
+
+    await c.env.DB.prepare(
+      `UPDATE social_posts SET thumbnail_url = ?, last_synced_at = datetime('now') WHERE id = ?;`
+    ).bind(freshThumbnailUrl, post.id).run();
+
+    return c.json({
+      success: true,
+      postId: post.id,
+      thumbnailUrl: freshThumbnailUrl,
+      message: 'Thumbnail berhasil disegarkan',
+    });
+  } catch (err: any) {
+    console.error('[Refresh Thumbnail Error]', err.message);
+    return c.json(
+      { success: false, error: err.message || 'Gagal menyegarkan thumbnail' },
+      500
+    );
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/composio/posts/refresh-thumbnails-batch
+// Menyegarkan hingga 50 thumbnail sekaligus dalam 1 panggilan API efisien
+// -------------------------------------------------------------
+composioRouter.post('/posts/refresh-thumbnails-batch', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json(
+      { success: false, error: 'Unauthorized: Sesi tidak ditemukan atau kedaluwarsa' },
+      401
+    );
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+    const body = await c.req.json().catch(() => ({}));
+    const postIds: string[] = Array.isArray(body.postIds) ? body.postIds.slice(0, 50) : [];
+
+    if (postIds.length === 0) {
+      return c.json({ success: false, error: 'Daftar postIds tidak boleh kosong' }, 400);
+    }
+
+    const placeholders = postIds.map(() => '?').join(',');
+    const { results: posts } = await c.env.DB.prepare(
+      `SELECT p.id, p.connection_id, p.platform, p.platform_post_id, p.thumbnail_url,
+              c.composio_connection_id, c.account_handle, c.user_id
+       FROM social_posts p
+       JOIN social_connections c ON p.connection_id = c.id
+       WHERE (p.id IN (${placeholders}) OR p.platform_post_id IN (${placeholders}))
+         AND c.user_id = ?;`
+    )
+      .bind(...postIds, ...postIds, user.id)
+      .all<any>();
+
+    if (!posts || posts.length === 0) {
+      return c.json({ success: true, updatedCount: 0, updatedMap: {} });
+    }
+
+    let composio = null;
+    if (c.env.COMPOSIO_API_KEY) {
+      composio = getComposioClient(c.env.COMPOSIO_API_KEY);
+    }
+
+    const updatedMap: Record<string, string> = {};
+    const updateStatements: any[] = [];
+
+    const byConn: Record<string, any[]> = {};
+    for (const post of posts) {
+      if (!byConn[post.connection_id]) byConn[post.connection_id] = [];
+      byConn[post.connection_id].push(post);
+    }
+
+    for (const connPosts of Object.values(byConn)) {
+      const sample = connPosts[0];
+      if (sample.platform === 'instagram' && composio) {
+        const objectIds = connPosts.map((p: any) => p.platform_post_id);
+        const res: any = await composio.tools.execute('INSTAGRAM_GET_MULTIPLE_NODES', {
+          connectedAccountId: sample.composio_connection_id,
+          userId: sample.user_id,
+          arguments: {
+            object_ids: objectIds,
+            fields: 'id,thumbnail_url,media_url,permalink,caption',
+          },
+        }).catch((err: any) => {
+          console.warn('[Batch Refresh] Instagram node fetch notice:', err.message);
+          return null;
+        });
+
+        const objects = res?.data?.objects || {};
+        for (const post of connPosts) {
+          const node = objects[post.platform_post_id];
+          let freshUrl = node?.media_url || node?.thumbnail_url;
+          if (freshUrl) {
+            if (c.env.MEDIA_BUCKET) {
+              try {
+                const r2Url = await mirrorThumbnailToR2(c.env, sample.platform, post.platform_post_id, freshUrl);
+                if (r2Url) freshUrl = r2Url;
+              } catch {}
+            }
+            updatedMap[post.id] = freshUrl;
+            updateStatements.push(
+              c.env.DB.prepare(
+                `UPDATE social_posts SET thumbnail_url = ?, last_synced_at = datetime('now') WHERE id = ?;`
+              ).bind(freshUrl, post.id)
+            );
+          }
+        }
+      } else if (sample.platform === 'youtube') {
+        for (const post of connPosts) {
+          const ytUrl = `https://i.ytimg.com/vi/${post.platform_post_id}/hqdefault.jpg`;
+          updatedMap[post.id] = ytUrl;
+          updateStatements.push(
+            c.env.DB.prepare(
+              `UPDATE social_posts SET thumbnail_url = ?, last_synced_at = datetime('now') WHERE id = ?;`
+            ).bind(ytUrl, post.id)
+          );
+        }
+      }
+    }
+
+    if (updateStatements.length > 0) {
+      await c.env.DB.batch(updateStatements);
+    }
+
+    return c.json({
+      success: true,
+      updatedCount: Object.keys(updatedMap).length,
+      updatedMap,
+    });
+  } catch (err: any) {
+    console.error('[Batch Refresh Error]', err.message);
+    return c.json(
+      { success: false, error: err.message || 'Gagal menyegarkan batch thumbnail' },
       500
     );
   }
@@ -1821,55 +2168,64 @@ composioRouter.get('/leads', async (c) => {
     await ensureSocialTables(c.env.DB);
 
     const projectId = c.req.query('projectId');
+    const connectionId = c.req.query('connectionId');
     const platform = c.req.query('platform'); // 'all' or specific
     const status = c.req.query('status'); // 'all' or specific
     const search = c.req.query('search');
     const dueToday = c.req.query('dueToday') === 'true' || c.req.query('dueToday') === '1';
 
-    let whereClauses: string[] = ['user_id = ?'];
+    let whereClauses: string[] = ['l.user_id = ?'];
     let params: any[] = [user.id];
 
     if (projectId) {
-      whereClauses.push('(project_id = ? OR project_id IS NULL)');
+      whereClauses.push('(l.project_id = ? OR l.project_id IS NULL)');
       params.push(projectId);
     }
 
+    if (connectionId && connectionId !== 'all') {
+      whereClauses.push('(l.connection_id = ?)');
+      params.push(connectionId);
+    }
+
     if (platform && platform !== 'all') {
-      whereClauses.push('platform = ?');
+      whereClauses.push('l.platform = ?');
       params.push(platform.toLowerCase());
     }
 
     if (status && status !== 'all') {
-      whereClauses.push('status = ?');
+      whereClauses.push('l.status = ?');
       params.push(status.toUpperCase());
     }
 
     if (dueToday) {
       const endOfToday = new Date();
       endOfToday.setHours(23, 59, 59, 999);
-      whereClauses.push('next_follow_up_at IS NOT NULL AND next_follow_up_at <= ? AND status NOT IN (\'CONVERTED\', \'LOST\', \'SPAM\')');
+      whereClauses.push('l.next_follow_up_at IS NOT NULL AND l.next_follow_up_at <= ? AND l.status NOT IN (\'CONVERTED\', \'LOST\', \'SPAM\')');
       params.push(endOfToday.toISOString());
     }
 
     if (search && search.trim()) {
-      whereClauses.push('(sender_name LIKE ? OR sender_handle LIKE ? OR last_message LIKE ?)');
+      whereClauses.push('(l.sender_name LIKE ? OR l.sender_handle LIKE ? OR l.last_message LIKE ?)');
       const s = `%${search.trim()}%`;
       params.push(s, s, s);
     }
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-    // Fetch leads with CRM fields (deal_value, next_follow_up_at, notes, last_message_direction)
+    // Fetch leads with CRM fields and connected account identity
     const { results: rawLeads } = await c.env.DB.prepare(
-      `SELECT id, project_id, user_id, connection_id, platform, external_sender_id,
-              sender_name, sender_handle, last_message, thread_id, status,
-              source_attribution, deal_value, next_follow_up_at, notes, unread,
-              COALESCE(last_message_direction, 'inbound') as last_message_direction,
-              raw_metadata, first_contact_at,
-              last_contact_at, created_at
-       FROM inbound_leads
+      `SELECT l.id, l.project_id, l.user_id, l.connection_id, l.platform, l.external_sender_id,
+              l.sender_name, l.sender_handle, l.last_message, l.thread_id, l.status,
+              l.source_attribution, l.deal_value, l.next_follow_up_at, l.notes, l.unread,
+              COALESCE(l.last_message_direction, 'inbound') as last_message_direction,
+              l.raw_metadata, l.first_contact_at,
+              l.last_contact_at, l.created_at,
+              c.account_handle as recipient_handle,
+              c.account_label as recipient_label
+       FROM inbound_leads l
+       LEFT JOIN social_connections c ON l.connection_id = c.id
        ${whereSql}
-       ORDER BY last_contact_at DESC
+       ORDER BY l.last_contact_at DESC
        LIMIT 100;`
     )
       .bind(...params)
@@ -1881,6 +2237,44 @@ composioRouter.get('/leads', async (c) => {
     if (projectId) {
       summaryWhere += ' AND (project_id = ? OR project_id IS NULL)';
       summaryParams.push(projectId);
+    }
+
+    // Capture unfiltered summary parameters for workspace global count
+    const unfilteredWhere = summaryWhere;
+    const unfilteredParams = [...summaryParams];
+
+    if (connectionId && connectionId !== 'all') {
+      summaryWhere += ' AND (connection_id = ?)';
+      summaryParams.push(connectionId);
+    }
+
+    // Fetch available connected accounts with per-account lead count
+    let connWhere = 'WHERE c.user_id = ?';
+    let connParams: any[] = [user.id];
+    if (projectId) {
+      connWhere += ' AND (c.project_id = ? OR c.project_id IS NULL)';
+      connParams.push(projectId);
+    }
+    const { results: availableConnections } = await c.env.DB.prepare(
+      `SELECT c.id, c.platform, c.account_handle, c.account_label, c.status,
+              COUNT(l.id) as lead_count
+       FROM social_connections c
+       LEFT JOIN inbound_leads l ON l.connection_id = c.id
+       ${connWhere}
+       GROUP BY c.id
+       ORDER BY c.created_at DESC;`
+    )
+      .bind(...connParams)
+      .all<any>();
+
+    let unfilteredTotalLeads = 0;
+    if (connectionId && connectionId !== 'all') {
+      const { results: countRows } = await c.env.DB.prepare(
+        `SELECT COUNT(*) as count FROM inbound_leads ${unfilteredWhere};`
+      )
+        .bind(...unfilteredParams)
+        .all<any>();
+      unfilteredTotalLeads = Number(countRows?.[0]?.count || 0);
     }
 
     const { results: allSummaryRows } = await c.env.DB.prepare(
@@ -1903,6 +2297,7 @@ composioRouter.get('/leads', async (c) => {
       whatsapp: 0,
       instagram: 0,
       facebook: 0,
+      tiktok: 0,
       gmail: 0,
       website: 0,
     };
@@ -2013,6 +2408,8 @@ composioRouter.get('/leads', async (c) => {
         id: r.id,
         projectId: r.project_id,
         connectionId: r.connection_id,
+        recipientHandle: r.recipient_handle || null,
+        recipientLabel: r.recipient_label || null,
         platform: r.platform,
         externalSenderId: r.external_sender_id,
         senderName: r.sender_name || 'Prospek Tanpa Nama',
@@ -2033,12 +2430,23 @@ composioRouter.get('/leads', async (c) => {
       };
     });
 
+    const formattedConnections = (availableConnections || []).map((conn: any) => ({
+      id: conn.id,
+      platform: conn.platform,
+      accountHandle: conn.account_handle,
+      accountLabel: conn.account_label,
+      status: conn.status,
+      leadCount: Number(conn.lead_count || 0),
+    }));
+
     return c.json({
       success: true,
       data: {
         leads,
+        connections: formattedConnections,
         summary: {
           totalLeads,
+          unfilteredTotalLeads: unfilteredTotalLeads || totalLeads,
           newToday,
           followUpDueToday,
           totalRevenue,
@@ -2049,6 +2457,7 @@ composioRouter.get('/leads', async (c) => {
         },
         stats: {
           totalLeads,
+          unfilteredTotalLeads: unfilteredTotalLeads || totalLeads,
           newToday,
           followUpDueToday,
           totalRevenue,
@@ -2104,7 +2513,8 @@ composioRouter.post('/leads/sync', async (c) => {
     if (composio && conns && conns.length > 0) {
       for (const conn of conns) {
         const plat = conn.platform.toLowerCase();
-        const effectiveProjectId = (projectId && projectId !== 'prj_default') ? projectId : (conn.project_id || projectId || 'prj_default');
+        const preferredProj = (projectId && projectId !== 'prj_default') ? projectId : conn.project_id;
+        const effectiveProjectId = await resolveValidProject(c.env.DB, preferredProj, user.id);
         try {
           if (plat === 'instagram') {
             const res: any = await composio.tools.execute('INSTAGRAM_LIST_ALL_CONVERSATIONS', {
@@ -2410,18 +2820,25 @@ composioRouter.post('/leads/sync', async (c) => {
                 const leadId = `lead_gm_${conn.id}_${m.id}`;
                 const leadEmail = m.from || m.sender || 'lead@client.com';
                 const subject = m.subject || m.snippet || 'Pertanyaan Layanan';
+                
+                // Native Read Status Sync: Detect UNREAD label from Gmail
+                const labelList: string[] = Array.isArray(m.labelIds) ? m.labelIds : (Array.isArray(m.labels) ? m.labels : []);
+                const isUnread = labelList.includes('UNREAD') ? 1 : 0;
+
                 await c.env.DB.prepare(
                   `INSERT INTO inbound_leads (
                     id, project_id, user_id, connection_id, platform, external_sender_id,
                     sender_name, sender_handle, last_message, thread_id, status, source_attribution,
-                    raw_metadata, first_contact_at, last_contact_at, created_at
-                  ) VALUES (?, ?, ?, ?, 'gmail', ?, ?, ?, ?, ?, 'NEW', 'cta_button', ?, datetime('now'), datetime('now'), datetime('now'))
+                    unread, raw_metadata, first_contact_at, last_contact_at, created_at
+                  ) VALUES (?, ?, ?, ?, 'gmail', ?, ?, ?, ?, ?, 'NEW', 'cta_button', ?, ?, datetime('now'), datetime('now'), datetime('now'))
                   ON CONFLICT(project_id, platform, external_sender_id) DO UPDATE SET
                     last_message = excluded.last_message,
+                    unread = excluded.unread,
                     last_contact_at = excluded.last_contact_at;`
                 ).bind(
                   leadId, projectId, user.id, conn.id, leadEmail,
                   leadEmail.split('@')[0], leadEmail, subject, m.threadId || m.id,
+                  isUnread,
                   JSON.stringify(m)
                 ).run();
                 syncedCount++;
@@ -2436,7 +2853,7 @@ composioRouter.post('/leads/sync', async (c) => {
 
     let responseMessage = '';
     if (syncedCount > 0) {
-      responseMessage = `${syncedCount} percakapan leads berhasil disinkronisasi.`;
+      responseMessage = `${syncedCount} percakapan leads berhasil disinkronkan ke database.`;
       if (syncWarnings.length > 0) {
         responseMessage += ` (${syncWarnings.join('; ')})`;
       }
@@ -2472,10 +2889,11 @@ composioRouter.post('/leads', async (c) => {
     await ensureSocialTables(c.env.DB);
     const body = await c.req.json().catch(() => ({}));
 
-    const projectId = String(body.projectId || 'prj_default').trim();
+    const rawProjectId = body.projectId;
+    const projectId = await resolveValidProject(c.env.DB, rawProjectId, user.id);
     const platform = String(body.platform || 'whatsapp').trim().toLowerCase();
     const senderName = String(body.senderName || 'Calon Prospek').trim();
-    const senderHandle = String(body.senderHandle || '').trim();
+    const senderHandle = String(body.senderHandle || body.externalSenderId || '').trim();
     const lastMessage = String(body.lastMessage || 'Halo, saya tertarik dengan layanan Anda.').trim();
     const validStatuses = ['NEW', 'CONTACTED', 'QUALIFIED', 'NEGOTIATION', 'CONVERTED', 'LOST', 'SPAM'];
     const rawStatus = String(body.status || 'NEW').trim().toUpperCase();
@@ -2501,15 +2919,33 @@ composioRouter.post('/leads', async (c) => {
       }
     }
 
-    const externalSenderId = senderHandle || `manual_${Date.now()}`;
+    // Gunakan externalSenderId dari form, fallback ke senderHandle, atau fallback id unik
+    let externalSenderId = String(body.externalSenderId || senderHandle || `manual_${Date.now()}`).trim();
+    // Normalisasi format nomor WhatsApp jika berawalan 08... ke 628...
+    if (platform === 'whatsapp') {
+      const cleanDigits = externalSenderId.replace(/[^0-9]/g, '');
+      if (cleanDigits.startsWith('0')) {
+        externalSenderId = '62' + cleanDigits.slice(1);
+      } else if (cleanDigits.length > 0) {
+        externalSenderId = cleanDigits;
+      }
+    }
+
     const leadId = `lead_${platform}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+
+    const metaPayload = {
+      initialInquiry: lastMessage,
+      direction: 'inbound',
+      creator: user.username || user.email || 'Admin',
+      channelSource: 'manual_entry',
+    };
 
     await c.env.DB.prepare(
       `INSERT INTO inbound_leads (
         id, project_id, user_id, connection_id, platform, external_sender_id,
         sender_name, sender_handle, last_message, thread_id, status, source_attribution,
-        deal_value, next_follow_up_at, notes, unread, raw_metadata, first_contact_at, last_contact_at, created_at
-      ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 1, '{}', datetime('now'), datetime('now'), datetime('now'))
+        deal_value, next_follow_up_at, notes, unread, last_message_direction, raw_metadata, first_contact_at, last_contact_at, created_at
+      ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 1, 'inbound', ?, datetime('now'), datetime('now'), datetime('now'))
       ON CONFLICT(project_id, platform, external_sender_id) DO UPDATE SET
         last_message = excluded.last_message,
         last_contact_at = datetime('now'),
@@ -2521,7 +2957,7 @@ composioRouter.post('/leads', async (c) => {
       .bind(
         leadId, projectId, user.id, platform, externalSenderId,
         senderName, senderHandle, lastMessage, status, sourceAttribution,
-        dealValue, nextFollowUpAt, initialNotes
+        dealValue, nextFollowUpAt, initialNotes, JSON.stringify(metaPayload)
       )
       .run();
 
@@ -2567,6 +3003,56 @@ composioRouter.patch('/leads/:id', async (c) => {
     if (body.unread !== undefined) {
       updateSql.push('unread = ?');
       params.push(body.unread ? 1 : 0);
+
+      // Native Read Status Sync: When user marks as read in CRM, perform best-effort native sync
+      if (!body.unread && c.env.COMPOSIO_API_KEY) {
+        const syncNativeRead = async () => {
+          try {
+            const comp = getComposioClient(c.env.COMPOSIO_API_KEY);
+            if (!comp) return;
+
+            const targetLead: any = await c.env.DB.prepare(
+              'SELECT platform, external_sender_id, thread_id, connection_id FROM inbound_leads WHERE id = ? LIMIT 1;'
+            ).bind(leadId).first();
+
+            if (!targetLead) return;
+
+            let conn: any = null;
+            if (targetLead.connection_id) {
+              conn = await c.env.DB.prepare(
+                'SELECT composio_connection_id, user_id FROM social_connections WHERE composio_connection_id = ? LIMIT 1;'
+              ).bind(targetLead.connection_id).first();
+            }
+            if (!conn) {
+              conn = await c.env.DB.prepare(
+                'SELECT composio_connection_id, user_id FROM social_connections WHERE platform = ? AND user_id = ? AND status = \'ACTIVE\' LIMIT 1;'
+              ).bind(targetLead.platform, user.id).first();
+            }
+
+            if (conn && conn.composio_connection_id) {
+              const plat = String(targetLead.platform).toLowerCase();
+              if (plat === 'gmail' && targetLead.thread_id) {
+                await comp.tools.execute('GMAIL_MODIFY_THREAD', {
+                  connectedAccountId: conn.composio_connection_id,
+                  userId: conn.user_id,
+                  arguments: {
+                    id: targetLead.thread_id,
+                    removeLabelIds: ['UNREAD'],
+                  },
+                }).catch(() => null);
+              }
+            }
+          } catch (syncErr: any) {
+            console.warn('[Native Read Sync Notice]', syncErr.message);
+          }
+        };
+
+        if (c.executionCtx?.waitUntil) {
+          c.executionCtx.waitUntil(syncNativeRead());
+        } else {
+          syncNativeRead().catch(() => null);
+        }
+      }
     }
 
     if (body.lastMessage) {
@@ -2620,6 +3106,51 @@ composioRouter.patch('/leads/:id', async (c) => {
 
       updateSql.push('notes = ?');
       params.push(JSON.stringify(notesList));
+    }
+
+    // Capture structured Lost Reason when transitioning to LOST
+    if (body.lostReason && String(body.lostReason).trim()) {
+      const reasonText = String(body.lostReason).trim();
+      const existingLead: any = await c.env.DB.prepare(
+        'SELECT notes, raw_metadata FROM inbound_leads WHERE id = ? AND user_id = ? LIMIT 1;'
+      )
+        .bind(leadId, user.id)
+        .first();
+
+      let notesList: any[] = [];
+      if (existingLead && existingLead.notes) {
+        try {
+          const parsed = JSON.parse(existingLead.notes);
+          if (Array.isArray(parsed)) {
+            notesList = parsed;
+          } else {
+            notesList = [{ id: 'n_prev', author: 'Sistem', text: existingLead.notes, createdAt: new Date().toISOString() }];
+          }
+        } catch {
+          notesList = [{ id: 'n_prev', author: 'Sistem', text: existingLead.notes, createdAt: new Date().toISOString() }];
+        }
+      }
+
+      notesList.unshift({
+        id: `lost_${Date.now().toString(36)}`,
+        author: user.username || 'Admin',
+        text: `[Alasan Batal / Lost]: ${reasonText}`,
+        createdAt: new Date().toISOString(),
+      });
+
+      updateSql.push('notes = ?');
+      params.push(JSON.stringify(notesList));
+
+      let metaObj: any = {};
+      if (existingLead && existingLead.raw_metadata) {
+        try {
+          metaObj = JSON.parse(existingLead.raw_metadata);
+        } catch {}
+      }
+      metaObj.lostReason = reasonText;
+      metaObj.lostAt = new Date().toISOString();
+      updateSql.push('raw_metadata = ?');
+      params.push(JSON.stringify(metaObj));
     }
 
     if (updateSql.length === 0) {

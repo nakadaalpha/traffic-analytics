@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { createPortal } from 'react-dom';
 import {
@@ -402,6 +402,10 @@ export default function SocialMediaPage() {
   const isViewer = userRole === 'viewer';
 
   const [connections, setConnections] = useState<SocialConnection[]>([]);
+  const connectionsRef = useRef<SocialConnection[]>(connections);
+  useEffect(() => {
+    connectionsRef.current = connections;
+  }, [connections]);
   const [loading, setLoading] = useState(true);
   const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -515,7 +519,12 @@ export default function SocialMediaPage() {
         try {
           const json = JSON.parse(rawText);
           if (json.success && Array.isArray(json.data)) {
-            setConnections(json.data);
+            setConnections((prev) => {
+              if (JSON.stringify(prev) === JSON.stringify(json.data)) {
+                return prev;
+              }
+              return json.data;
+            });
           }
         } catch {}
       }
@@ -551,7 +560,7 @@ export default function SocialMediaPage() {
           setMetricsData(json);
           const activeId = targetId || json.primaryAccount?.id;
           if (activeId) {
-            setSelectedConnectionId(activeId);
+            setSelectedConnectionId((prev) => (prev === activeId ? prev : activeId));
             if (typeof window !== 'undefined') {
               localStorage.setItem('firenalytics_selected_conn_id', activeId);
             }
@@ -575,7 +584,7 @@ export default function SocialMediaPage() {
         params.append('platform', postPlatformFilter);
       }
       if (targetConnId) {
-        const targetConn = connections.find((c) => c.id === targetConnId);
+        const targetConn = connectionsRef.current.find((c) => c.id === targetConnId);
         if (postPlatformFilter === 'all' || (targetConn && targetConn.platform.toLowerCase() === postPlatformFilter.toLowerCase())) {
           params.append('connectionId', targetConnId);
         }
@@ -601,7 +610,7 @@ export default function SocialMediaPage() {
     } finally {
       setPostsLoading(false);
     }
-  }, [getAuthHeaders, postPlatformFilter, postSortBy, selectedConnectionId, connections, currentProject?.id]);
+  }, [getAuthHeaders, postPlatformFilter, postSortBy, selectedConnectionId, currentProject?.id]);
 
   // Handler: Buka modal dan muat komentar riil untuk postingan spesifik
   const openCommentsModal = useCallback(async (post: SocialPost) => {
@@ -640,7 +649,7 @@ export default function SocialMediaPage() {
         params.append('platform', postPlatformFilter);
       }
       if (selectedConnectionId) {
-        const targetConn = connections.find((c) => c.id === selectedConnectionId);
+        const targetConn = connectionsRef.current.find((c) => c.id === selectedConnectionId);
         if (postPlatformFilter === 'all' || (targetConn && targetConn.platform.toLowerCase() === postPlatformFilter.toLowerCase())) {
           params.append('connectionId', selectedConnectionId);
         }
@@ -662,7 +671,7 @@ export default function SocialMediaPage() {
     } finally {
       setInsightsLoading(false);
     }
-  }, [getAuthHeaders, postPlatformFilter, selectedConnectionId, connections, currentProject?.id]);
+  }, [getAuthHeaders, postPlatformFilter, selectedConnectionId, currentProject?.id]);
 
   // Handler: Refresh manual analisis intelijensi AI
   const handleRefreshInsights = async () => {
@@ -833,14 +842,23 @@ export default function SocialMediaPage() {
     setSelectedConnectionId(null);
   }, [currentProject?.id]);
 
+  // 1. Inisialisasi dasar saat workspace/proyek dimuat atau berganti
   useEffect(() => {
     fetchConnections();
     fetchMetrics();
-    fetchPosts();
-    fetchInsights();
     fetchAttribution();
     fetchCampaignLinks();
-  }, [fetchConnections, fetchMetrics, fetchPosts, fetchInsights, fetchAttribution, fetchCampaignLinks]);
+  }, [fetchConnections, fetchMetrics, fetchAttribution, fetchCampaignLinks]);
+
+  // 2. Muat postingan saat filter platform, urutan, atau akun terpilih berubah
+  useEffect(() => {
+    fetchPosts();
+  }, [fetchPosts]);
+
+  // 3. Muat analisis intelijensi AI secara terisolasi saat filter berubah
+  useEffect(() => {
+    fetchInsights();
+  }, [fetchInsights]);
 
   // Handler Otomatis: Deteksi kembalinya user dari OAuth Composio / Google / Meta
   useEffect(() => {

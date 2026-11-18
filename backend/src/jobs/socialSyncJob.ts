@@ -1,8 +1,10 @@
 import { getComposioClient } from '../modules/composio/client';
 import { ensureSocialTables } from '../modules/composio/routes';
+import { mirrorThumbnailToR2 } from '../modules/media/service';
 
 export interface SyncJobEnv {
   DB: D1Database;
+  MEDIA_BUCKET?: R2Bucket;
   COMPOSIO_API_KEY?: string;
 }
 
@@ -284,12 +286,19 @@ export async function handleSocialMediaSync(env: SyncJobEnv, targetConnectionId?
  * Sinkronisasi postingan & video (YouTube, Facebook, Threads, Instagram, Twitter/X)
  * Memastikan minimal metrik views, likes, dan comments tersedia untuk setiap konten.
  */
+export interface PostSyncResult {
+  success: boolean;
+  count: number;
+  warning?: string;
+}
+
 export async function syncSocialPostsForConnection(
   env: SyncJobEnv,
   conn: any,
   composioClient?: any,
   force = false
-): Promise<void> {
+): Promise<PostSyncResult> {
+  let lastWarning: string | undefined = undefined;
   try {
     const existingCountRes: any = await env.DB.prepare(
       `SELECT count(*) as total FROM social_posts WHERE connection_id = ?;`
@@ -322,7 +331,7 @@ export async function syncSocialPostsForConnection(
 
     // Jika sudah ada, tidak dipaksa force refresh, dan data sehat (tanpa thumbnail .mp4 / 0 views), skip
     if (existingCount > 0 && !force && !hasBrokenData) {
-      return;
+      return { success: true, count: existingCount };
     }
 
     const platform = (conn.platform || '').toLowerCase();
@@ -694,13 +703,16 @@ export async function syncSocialPostsForConnection(
           const rawItems: any[] = [];
           let nextCursor: string | null = null;
           let pageCount = 0;
-          const MAX_PAGES = 5; // Menjelajahi hingga 5 halaman x 100 = 500 postingan (mencakup seluruh postingan akun)
+          // Untuk interaksi manual cepat di UI (force = true), batasi 1 halaman (hingga 50 postingan teratas)
+          // dan 10 media insights agar selesai dalam < 3 detik tanpa timeout HTTP
+          const MAX_PAGES = force ? 1 : 3;
+          const PAGE_LIMIT = force ? 50 : 100;
 
           do {
             pageCount++;
             const args: any = {
               ig_user_id: 'me',
-              limit: 100,
+              limit: PAGE_LIMIT,
               fields:
                 'id,caption,media_type,media_product_type,media_url,permalink,thumbnail_url,timestamp,username,comments_count,like_count,view_count,shares_count',
             };
@@ -714,8 +726,21 @@ export async function syncSocialPostsForConnection(
               arguments: args,
             }).catch((err: any) => {
               console.warn(`[Social Sync] Instagram page ${pageCount} notice:`, err.message);
-              return null;
+              return { successful: false, error: err.message };
             });
+
+            // Deteksi respon penolakan / token expired dari Meta API
+            if (res?.successful === false || res?.data?.status_code === 403 || res?.data?.status_code === 401 || res?.data?.http_error) {
+              const errMsg = String(res?.data?.message || res?.error || '');
+              if (errMsg.includes('does not have permission') || errMsg.includes('code":10') || res?.data?.status_code === 403) {
+                lastWarning = `Akun ${conn.account_handle || 'Instagram'} memerlukan izin akses di Meta API. Pastikan akun berstatus Profesional, lalu hubungkan ulang akun di menu Manajemen & Integrasi.`;
+              } else if (errMsg.includes('Error validating access token') || errMsg.includes('code":190') || res?.data?.status_code === 401) {
+                lastWarning = `Sesi Meta API untuk akun ${conn.account_handle || 'Instagram'} telah kedaluwarsa. Silakan hubungkan ulang akun di menu Manajemen & Integrasi.`;
+              } else {
+                lastWarning = `Meta API (${conn.account_handle || 'Instagram'}): ${errMsg || 'Koneksi ke platform ditolak'}`;
+              }
+              break;
+            }
 
             if (res && res.data && Array.isArray(res.data.data) && res.data.data.length > 0) {
               rawItems.push(...res.data.data);
@@ -732,7 +757,7 @@ export async function syncSocialPostsForConnection(
 
           if (rawItems.length > 0) {
             realPosts = [];
-            const INSIGHT_LIMIT = Math.min(rawItems.length, 50);
+            const INSIGHT_LIMIT = Math.min(rawItems.length, force ? 10 : 30);
 
             // Optimasi batch: Proses insight media secara paralel terkontrol (5 per batch)
             // agar puluhan postingan selesai dalam waktu < 6 detik tanpa risiko timeout Cloudflare
@@ -973,7 +998,7 @@ export async function syncSocialPostsForConnection(
 
     if (postsToInsert.length === 0) {
       console.log(`[Social Posts Sync] No new posts returned from API for connection ${conn.id} (${platform}). Retaining existing posts to prevent data loss.`);
-      return;
+      return { success: !lastWarning, count: 0, warning: lastWarning };
     }
 
     // Simpan atau perbarui postingan dengan proteksi Baseline State Retention
@@ -984,11 +1009,38 @@ export async function syncSocialPostsForConnection(
       let finalComments = Number(post.comments_count || 0);
       let finalShares = Number(post.shares_count || 0);
 
+      let finalThumbnailUrl = post.thumbnail_url;
+      let finalPermalink = post.permalink;
+      let finalTitle = post.title_or_caption;
+
       if (prev) {
         if (finalViews === 0 && Number(prev.views_count || 0) > 0) finalViews = Number(prev.views_count);
         if (finalLikes === 0 && Number(prev.likes_count || 0) > 0) finalLikes = Number(prev.likes_count);
         if (finalComments === 0 && Number(prev.comments_count || 0) > 0) finalComments = Number(prev.comments_count);
         if (finalShares === 0 && Number(prev.shares_count || 0) > 0) finalShares = Number(prev.shares_count);
+
+        // Universal Baseline State Retention: Cegah data media kosong/null menimpa data valid sebelumnya
+        if ((!finalThumbnailUrl || !finalThumbnailUrl.trim()) && prev.thumbnail_url) {
+          finalThumbnailUrl = prev.thumbnail_url;
+        }
+        if ((!finalPermalink || !finalPermalink.trim()) && prev.permalink) {
+          finalPermalink = prev.permalink;
+        }
+        if ((!finalTitle || !finalTitle.trim()) && prev.title_or_caption) {
+          finalTitle = prev.title_or_caption;
+        }
+      }
+
+      // Cloudflare R2 Permanent Mirroring: Simpan thumbnail ke R2 agar tidak pernah kedaluwarsa
+      if (finalThumbnailUrl && env.MEDIA_BUCKET && !finalThumbnailUrl.startsWith('/api/media/')) {
+        try {
+          const r2Url = await mirrorThumbnailToR2(env, platform, post.platform_post_id, finalThumbnailUrl);
+          if (r2Url) {
+            finalThumbnailUrl = r2Url;
+          }
+        } catch (mirrorErr: any) {
+          console.warn('[Sync Job] R2 mirror warning:', mirrorErr.message);
+        }
       }
 
       if (platform === 'youtube' && finalViews === 0 && knownChannelViews > 0 && postsToInsert.length <= 2) {
@@ -1012,9 +1064,9 @@ export async function syncSocialPostsForConnection(
           conn.id,
           platform,
           post.platform_post_id,
-          post.title_or_caption,
-          post.thumbnail_url,
-          post.permalink,
+          finalTitle,
+          finalThumbnailUrl,
+          finalPermalink,
           post.published_at,
           finalViews,
           finalLikes,
@@ -1026,8 +1078,10 @@ export async function syncSocialPostsForConnection(
     }
 
     console.log(`[Social Posts Sync] Synced ${postsToInsert.length} posts for connection ${conn.id} (${platform})`);
+    return { success: true, count: postsToInsert.length, warning: lastWarning };
   } catch (err: any) {
     console.error(`[Social Posts Sync Error] Failed for connection ${conn.id}:`, err.message);
+    return { success: false, count: 0, warning: err.message };
   }
 }
 

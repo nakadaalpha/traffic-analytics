@@ -25,6 +25,10 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+# Database Snapshots & Local Dumps
+*snapshot*.sql
+*.dump.sql
+
 # OS / Editor files
 .DS_Store
 *.pem

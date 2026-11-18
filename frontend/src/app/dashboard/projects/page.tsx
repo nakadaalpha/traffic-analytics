@@ -31,6 +31,8 @@ import {
   Send,
   Radio,
   CheckCircle2,
+  Smartphone,
+  CheckCheck,
 } from "lucide-react";
 import { useProject } from "@/context/ProjectContext";
 
@@ -210,7 +212,8 @@ export default function ProjectsPage() {
   const [copiedVerifyToken, setCopiedVerifyToken] = useState(false);
   const [copiedFormUrl, setCopiedFormUrl] = useState(false);
   const [simulatingWebhook, setSimulatingWebhook] = useState(false);
-  const [simPlatform, setSimPlatform] = useState<"instagram" | "whatsapp" | "website">("instagram");
+  const [simEventType, setSimEventType] = useState<"MESSAGE" | "READ_RECEIPT">("MESSAGE");
+  const [simPlatform, setSimPlatform] = useState<"instagram" | "whatsapp" | "tiktok" | "website">("instagram");
   const [simSenderName, setSimSenderName] = useState("");
   const [simSenderHandle, setSimSenderHandle] = useState("");
   const [simMessage, setSimMessage] = useState("Halo min, mau tanya info layanan dan harga untuk bisnis kami?");
@@ -218,7 +221,9 @@ export default function ProjectsPage() {
 
   const handleSimulateWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProject || !simMessage.trim()) return;
+    if (!selectedProject) return;
+    if (simEventType === "MESSAGE" && !simMessage.trim()) return;
+
     try {
       setSimulatingWebhook(true);
       setSimFeedback(null);
@@ -226,11 +231,12 @@ export default function ProjectsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          eventType: simEventType,
           projectId: selectedProject.id,
           platform: simPlatform,
           senderName: simSenderName.trim() || undefined,
           senderHandle: simSenderHandle.trim() || undefined,
-          messageText: simMessage.trim(),
+          messageText: simMessage.trim() || undefined,
         }),
       });
       let data: any = null;
@@ -248,11 +254,18 @@ export default function ProjectsPage() {
       }
 
       if (res.ok && data?.success) {
-        setSimFeedback({
-          type: "success",
-          text: `Sukses! Pesan simulasi berhasil diterima oleh Webhook Engine dan dicatat ke CRM (${data.data?.sender || "prospek"}). Buka menu Leads & Pesan Masuk untuk melihatnya.`,
-        });
-        setSimMessage("");
+        if (simEventType === "READ_RECEIPT") {
+          setSimFeedback({
+            type: "success",
+            text: `Sukses! Tanda baca (Read Receipt) dari aplikasi HP native berhasil disinkronkan ke CRM untuk ${data.data?.sender || "prospek"}. Status di Leads & Pesan Masuk kini otomatis 'Sudah Dibaca'.`,
+          });
+        } else {
+          setSimFeedback({
+            type: "success",
+            text: `Sukses! Pesan simulasi berhasil diterima oleh Webhook Engine dan dicatat ke CRM (${data.data?.sender || "prospek"}). Buka menu Leads & Pesan Masuk untuk melihatnya.`,
+          });
+          setSimMessage("");
+        }
       } else {
         setSimFeedback({
           type: "error",
@@ -1408,6 +1421,44 @@ export default function ProjectsPage() {
           )}
 
           <form onSubmit={handleSimulateWebhook} className="space-y-3">
+            {/* Event Type Segmented Control: New Message vs Native Read Receipt */}
+            <div className="flex items-center gap-2 p-1 bg-white border border-zinc-200 rounded-lg max-w-md">
+              <button
+                type="button"
+                onClick={() => setSimEventType("MESSAGE")}
+                className={`flex-1 py-1.5 px-3 rounded-md text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  simEventType === "MESSAGE"
+                    ? "bg-zinc-900 text-white shadow-xs"
+                    : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50"
+                }`}
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>Pesan Masuk Baru</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSimEventType("READ_RECEIPT")}
+                className={`flex-1 py-1.5 px-3 rounded-md text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  simEventType === "READ_RECEIPT"
+                    ? "bg-blue-600 text-white shadow-xs"
+                    : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-50"
+                }`}
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                <span>Tanda Baca Native (HP)</span>
+              </button>
+            </div>
+
+            {simEventType === "READ_RECEIPT" && (
+              <div className="p-2.5 rounded-lg bg-blue-50/70 border border-blue-200 text-blue-900 text-xs flex items-start gap-2">
+                <CheckCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold">Simulasi Native Read Status: </span>
+                  Mensimulasikan saat admin atau pelanggan membuka chat di aplikasi HP asli (Instagram DM atau WhatsApp). Webhook akan menyinkronkan status prospek di CRM menjadi <strong>'Sudah Dibaca'</strong> secara real-time.
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="text-[11px] font-semibold text-zinc-700 block mb-1">
@@ -1420,6 +1471,7 @@ export default function ProjectsPage() {
                 >
                   <option value="instagram">Instagram DM</option>
                   <option value="whatsapp">WhatsApp Business</option>
+                  <option value="tiktok">TikTok (Lead Gen & DM)</option>
                   <option value="website">Formulir Website</option>
                 </select>
               </div>
@@ -1432,7 +1484,13 @@ export default function ProjectsPage() {
                   type="text"
                   value={simSenderName}
                   onChange={(e) => setSimSenderName(e.target.value)}
-                  placeholder={simPlatform === 'whatsapp' ? 'Budi Santoso' : 'Rian Pratama'}
+                  placeholder={
+                    simPlatform === 'whatsapp'
+                      ? 'Budi Santoso'
+                      : simPlatform === 'tiktok'
+                        ? 'Citra TikTok Creator'
+                        : 'Rian Pratama'
+                  }
                   className="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900"
                 />
               </div>
@@ -1445,7 +1503,13 @@ export default function ProjectsPage() {
                   type="text"
                   value={simSenderHandle}
                   onChange={(e) => setSimSenderHandle(e.target.value)}
-                  placeholder={simPlatform === 'whatsapp' ? '+6281298765432' : '@rian_simulasi'}
+                  placeholder={
+                    simPlatform === 'whatsapp'
+                      ? '+6281298765432'
+                      : simPlatform === 'tiktok'
+                        ? '@citra_creator'
+                        : '@rian_simulasi'
+                  }
                   className="w-full bg-white border border-zinc-300 rounded-lg px-2.5 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900 font-mono"
                 />
               </div>
@@ -1453,32 +1517,39 @@ export default function ProjectsPage() {
 
             <div>
               <label className="text-[11px] font-semibold text-zinc-700 block mb-1">
-                Pesan Chat Masuk
+                {simEventType === "READ_RECEIPT" ? "Catatan / Pesan Terakhir (Opsional)" : "Pesan Chat Masuk"}
               </label>
               <input
                 type="text"
-                required
+                required={simEventType === "MESSAGE"}
                 value={simMessage}
                 onChange={(e) => setSimMessage(e.target.value)}
-                placeholder="Ketik teks pesan pertanyaan customer..."
+                placeholder={simEventType === "READ_RECEIPT" ? "Pesan terakhir yang telah dibaca di aplikasi HP..." : "Ketik teks pesan pertanyaan customer..."}
                 className="w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-xs text-zinc-900 focus:outline-none focus:border-zinc-900"
               />
             </div>
 
             <div className="flex items-center justify-between pt-1 flex-wrap gap-2">
               <span className="text-[11px] text-zinc-400">
-                Pesan ini akan langsung masuk ke tabel <code className="font-mono">inbound_leads</code> dan terlihat di halaman Leads.
+                {simEventType === "READ_RECEIPT"
+                  ? "Event tanda baca ini menyelaraskan kolom status unread ke 0 secara otomatis."
+                  : "Pesan ini akan langsung masuk ke tabel inbound_leads dan terlihat di halaman Leads."}
               </span>
 
               <button
                 type="submit"
-                disabled={simulatingWebhook || !simMessage.trim()}
+                disabled={simulatingWebhook || (simEventType === "MESSAGE" && !simMessage.trim())}
                 className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-50 text-white font-medium text-xs rounded-lg shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
               >
                 {simulatingWebhook ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     <span>Mengirim Simulasi...</span>
+                  </>
+                ) : simEventType === "READ_RECEIPT" ? (
+                  <>
+                    <CheckCheck className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Kirim Tanda Baca (Read Receipt)</span>
                   </>
                 ) : (
                   <>

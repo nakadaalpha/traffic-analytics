@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { createPortal } from 'react-dom';
 import { 
   ArrowUpDown, 
   RotateCw, 
+  RefreshCw,
+  Loader2,
   Eye, 
   ThumbsUp, 
   MessageCircle, 
@@ -18,6 +20,7 @@ import {
   Search, 
   PlaySquare, 
   Calendar,
+  ChevronLeft,
   ChevronRight,
   TrendingUp,
   Clock,
@@ -128,8 +131,292 @@ const SUPPORTED_PLATFORMS = [
   },
 ];
 
+/**
+ * Memeriksa apakah URL CDN Instagram (&oe=...) telah kedaluwarsa secara deterministik.
+ * Nilai parameter oe adalah timestamp unix detik dalam format hexadecimal.
+ */
+function isInstagramUrlExpired(url: string | null | undefined): boolean {
+  if (!url) return true;
+  const match = url.match(/[?&]oe=([0-9a-fA-F]+)/);
+  if (!match) return false;
+  try {
+    const expSec = parseInt(match[1], 16);
+    const nowSec = Math.floor(Date.now() / 1000);
+    return expSec <= nowSec;
+  } catch {
+    return false;
+  }
+}
+
+// -------------------------------------------------------------
+// Component: Defensive Post Thumbnail with Seamless Zero-Click Mirroring & Shimmer Placeholder
+// -------------------------------------------------------------
+function PostThumbnail({ 
+  post, 
+  platformObj,
+  onThumbnailUpdated,
+}: { 
+  post: SocialPost; 
+  platformObj: any;
+  onThumbnailUpdated?: (postId: string, newUrl: string) => void;
+}) {
+  const [currentUrl, setCurrentUrl] = useState<string | null>(post.thumbnailUrl);
+  const [hasError, setHasError] = useState(false);
+  const [isAutoHealing, setIsAutoHealing] = useState(false);
+  const autoHealAttempted = React.useRef(false);
+
+  useEffect(() => {
+    setCurrentUrl(post.thumbnailUrl);
+    setHasError(false);
+  }, [post.thumbnailUrl]);
+
+  // Cek apakah URL Instagram kadaluarsa secara deterministik (&oe=...)
+  const isExpired = post.platform === 'instagram' && isInstagramUrlExpired(currentUrl);
+
+  // Silent Auto-Heal: Jika URL kedaluwarsa atau terjadi image error, minta backend mirror ke R2 secara otomatis
+  useEffect(() => {
+    if ((isExpired || hasError) && !isAutoHealing && !autoHealAttempted.current) {
+      autoHealAttempted.current = true;
+      setIsAutoHealing(true);
+
+      fetch(`/api/composio/posts/${encodeURIComponent(post.id)}/refresh-thumbnail`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success && data.thumbnailUrl) {
+            setCurrentUrl(data.thumbnailUrl);
+            setHasError(false);
+            if (onThumbnailUpdated) {
+              onThumbnailUpdated(post.id, data.thumbnailUrl);
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          setIsAutoHealing(false);
+        });
+    }
+  }, [isExpired, hasError, isAutoHealing, post.id, onThumbnailUpdated]);
+
+  // State: Sedang dalam proses auto-healing di latar belakang -> Tampilkan Shimmer Elegan
+  if (isAutoHealing) {
+    return (
+      <div className="relative rounded-lg overflow-hidden bg-zinc-900/90 aspect-[3/4] p-3.5 flex flex-col justify-between border border-zinc-800 animate-pulse text-left">
+        <div className="flex items-center justify-between gap-1">
+          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-white/10 text-zinc-300 flex items-center gap-1 border border-white/10">
+            {platformObj?.iconSvg}
+            <span className="capitalize">{post.platform}</span>
+          </span>
+          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[9px] font-medium">
+            <Loader2 className="w-2.5 h-2.5 animate-spin" />
+            <span>Memuat...</span>
+          </span>
+        </div>
+        <div className="space-y-2 my-auto px-1">
+          <div className="h-2.5 bg-zinc-800 rounded w-4/5"></div>
+          <div className="h-2.5 bg-zinc-800 rounded w-3/5"></div>
+        </div>
+        <div className="h-6 bg-zinc-800/80 rounded w-full"></div>
+      </div>
+    );
+  }
+
+  // Jika URL benar-benar kosong atau gagal permanen setelah auto-heal
+  if (!currentUrl || (hasError && autoHealAttempted.current)) {
+    return (
+      <div className="relative rounded-lg overflow-hidden bg-gradient-to-br from-zinc-800 via-zinc-900 to-zinc-950 aspect-[3/4] p-3.5 flex flex-col justify-between border border-zinc-800 group/thumb text-left">
+        <div className="flex items-center justify-between gap-1">
+          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-white/10 text-zinc-300 backdrop-blur-xs flex items-center gap-1 border border-white/10">
+            {platformObj?.iconSvg}
+            <span className="capitalize">{post.platform}</span>
+          </span>
+        </div>
+
+        <div className="space-y-1.5 my-auto">
+          <p className="text-xs text-zinc-300 line-clamp-4 leading-relaxed font-normal italic">
+            "{post.titleOrCaption || 'Tidak ada keterangan caption'}"
+          </p>
+        </div>
+
+        {post.permalink && (
+          <a
+            href={post.permalink}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center justify-center gap-1.5 w-full py-1.5 px-2 rounded-md bg-white/10 hover:bg-white/20 text-white text-[11px] font-medium transition-colors border border-white/10"
+          >
+            <span>Buka di {post.platform === 'instagram' ? 'Instagram' : 'Platform'}</span>
+            <ExternalLink className="w-3 h-3 text-zinc-300" />
+          </a>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative rounded-lg overflow-hidden bg-zinc-900 aspect-[3/4] group/thumb">
+      {currentUrl.includes('.mp4') ? (
+        <video
+          src={currentUrl}
+          className="w-full h-full object-cover"
+          muted
+          playsInline
+          preload="metadata"
+          onError={() => setHasError(true)}
+        />
+      ) : (
+        <img
+          src={currentUrl}
+          alt={post.titleOrCaption}
+          className="w-full h-full object-cover transition-transform duration-300 group-hover/thumb:scale-105"
+          loading="lazy"
+          onError={() => setHasError(true)}
+        />
+      )}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
+      {post.additionalMetrics?.duration && (
+        <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-xs text-[10px] font-mono font-semibold text-white">
+          {post.additionalMetrics.duration}
+        </span>
+      )}
+      {post.additionalMetrics?.media_type && (
+        <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-xs text-[9px] font-semibold text-white uppercase">
+          {post.additionalMetrics.media_type}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// Component: Reusable Pagination Bar (Top & Bottom Sandwich)
+// -------------------------------------------------------------
+function PaginationBar({
+  position,
+  totalItems,
+  startIndex,
+  endIndex,
+  itemsPerPage,
+  setItemsPerPage,
+  currentPage,
+  setCurrentPage,
+  totalPages,
+  onNavigateTop,
+}: {
+  position: 'top' | 'bottom';
+  totalItems: number;
+  startIndex: number;
+  endIndex: number;
+  itemsPerPage: number;
+  setItemsPerPage: (val: number) => void;
+  currentPage: number;
+  setCurrentPage: React.Dispatch<React.SetStateAction<number>>;
+  totalPages: number;
+  onNavigateTop?: () => void;
+}) {
+  return (
+    <div
+      className={`${
+        position === 'top'
+          ? 'border-b border-zinc-200/90 bg-zinc-50/40'
+          : 'border-t border-zinc-200 bg-white'
+      } px-5 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs`}
+    >
+      {/* Kiri: Ringkasan Data */}
+      <div className="text-zinc-500 font-medium text-center sm:text-left">
+        Menampilkan{' '}
+        <span className="font-semibold text-zinc-900">
+          {totalItems === 0 ? 0 : startIndex + 1}
+        </span>{' '}
+        -{' '}
+        <span className="font-semibold text-zinc-900">{endIndex}</span> dari{' '}
+        <span className="font-semibold text-zinc-900">{totalItems}</span> konten
+      </div>
+
+      {/* Kanan: Pilihan Konten per Halaman & Navigasi Halaman */}
+      <div className="flex items-center gap-3 sm:gap-4 flex-wrap justify-center">
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 text-[11px] whitespace-nowrap">
+            Konten per halaman:
+          </span>
+          <select
+            value={itemsPerPage}
+            onChange={(e) => {
+              setItemsPerPage(Number(e.target.value));
+              setCurrentPage(1);
+              if (position === 'bottom') {
+                onNavigateTop?.();
+              }
+            }}
+            className="text-xs font-semibold px-2 py-1 rounded-md border border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-900 cursor-pointer shadow-2xs transition-colors"
+          >
+            <option value={12}>12 (3 baris)</option>
+            <option value={24}>24 (6 baris)</option>
+            <option value={48}>48 (12 baris)</option>
+            <option value={96}>96 (24 baris)</option>
+          </select>
+        </div>
+
+        <div className="h-4 w-px bg-zinc-200 hidden sm:block" />
+
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              setCurrentPage((p) => Math.max(1, p - 1));
+              if (position === 'bottom') {
+                onNavigateTop?.();
+              }
+            }}
+            disabled={currentPage <= 1}
+            className="px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-xs font-medium flex items-center gap-1 shadow-2xs cursor-pointer"
+            title="Halaman Sebelumnya"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Sebelumnya</span>
+          </button>
+
+          <div className="px-2.5 py-1 text-xs font-semibold text-zinc-700 bg-zinc-100 rounded-md border border-zinc-200/80">
+            Hal {currentPage} dari {totalPages}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setCurrentPage((p) => Math.min(totalPages, p + 1));
+              if (position === 'bottom') {
+                onNavigateTop?.();
+              }
+            }}
+            disabled={currentPage >= totalPages}
+            className="px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-xs font-medium flex items-center gap-1 shadow-2xs cursor-pointer"
+            title="Halaman Berikutnya"
+          >
+            <span className="hidden sm:inline">Berikutnya</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SocialPostsPage() {
   const { currentProject } = useProject();
+
+  const catalogContainerRef = useRef<HTMLDivElement>(null);
+
+  const scrollToCatalogTop = () => {
+    if (catalogContainerRef.current) {
+      const yOffset = -80; // 64px header + 16px buffer
+      const y = catalogContainerRef.current.getBoundingClientRect().top + window.pageYOffset + yOffset;
+      window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+    }
+  };
 
   const getAuthHeaders = useCallback((): Record<string, string> => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -148,11 +435,24 @@ export default function SocialPostsPage() {
   const [loading, setLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
 
+  const handleThumbnailUpdated = useCallback((postId: string, newUrl: string) => {
+    setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, thumbnailUrl: newUrl } : p)));
+  }, []);
+
   // Filters & Search
   const [platformFilter, setPlatformFilter] = useState<string>('all');
   const [selectedConnectionId, setSelectedConnectionId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<'views' | 'likes' | 'comments' | 'recent'>('views');
+  const [sortBy, setSortBy] = useState<'views' | 'likes' | 'comments' | 'recent'>('recent');
+
+  // Client-Side Grid Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(24);
+
+  // Auto-reset ke Halaman 1 saat filter, pencarian, atau sorting berubah
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [platformFilter, selectedConnectionId, searchQuery, sortBy]);
 
   // Modal Komentar Masuk
   const [mounted, setMounted] = useState(false);
@@ -239,8 +539,31 @@ export default function SocialPostsPage() {
       const json = await res.json().catch(() => ({}));
 
       if (json.success) {
-        setPosts(json.posts || []);
+        const fetchedPosts: SocialPost[] = json.posts || [];
+        setPosts(fetchedPosts);
         setPostsSummary(json.summary || null);
+
+        // Silent Background Batch Auto-Heal: Perbarui dan simpan gambar kedaluwarsa ke Cloudflare R2 secara otomatis
+        const expiredPosts = fetchedPosts.filter(
+          (p) => p.platform === 'instagram' && p.thumbnailUrl && isInstagramUrlExpired(p.thumbnailUrl)
+        );
+        if (expiredPosts.length > 0) {
+          const postIdsToHeal = expiredPosts.slice(0, 30).map((p) => p.id);
+          fetch('/api/composio/posts/refresh-thumbnails-batch', {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ postIds: postIdsToHeal }),
+          })
+            .then((r) => r.json())
+            .then((data) => {
+              if (data.success && data.updatedMap && Object.keys(data.updatedMap).length > 0) {
+                setPosts((prev) =>
+                  prev.map((p) => (data.updatedMap[p.id] ? { ...p, thumbnailUrl: data.updatedMap[p.id] } : p))
+                );
+              }
+            })
+            .catch(() => {});
+        }
       }
     } catch (err: any) {
       console.warn('Gagal memuat data postingan:', err.message);
@@ -257,10 +580,11 @@ export default function SocialPostsPage() {
     fetchPosts();
   }, [fetchPosts]);
 
-  // 3. Handle Manual Sync Konten
+  // 3. Handle Manual Sync Konten dengan penanganan defensif & detail error
   const handleManualSync = async () => {
     try {
       setIsSyncing(true);
+      setNotification(null);
       const payload: any = { force: true };
       if (currentProject?.id) payload.projectId = currentProject.id;
       if (selectedConnectionId && selectedConnectionId !== 'all') {
@@ -273,18 +597,35 @@ export default function SocialPostsPage() {
           ...getAuthHeaders(),
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify(payload),
       });
 
-      const json = await res.json().catch(() => ({}));
-      if (json.success) {
+      let json: any = null;
+      try {
+        json = await res.json();
+      } catch {
+        json = {
+          error:
+            res.status === 504
+              ? 'Proses sinkronisasi media sosial membutuhkan waktu lebih lama dan sedang dilanjutkan di latar belakang.'
+              : res.status === 502
+              ? 'Server backend sedang memulai ulang. Silakan coba kembali dalam beberapa saat.'
+              : res.status === 401
+              ? 'Sesi login telah kedaluwarsa. Silakan muat ulang halaman atau masuk kembali.'
+              : `Gagal menyinkronkan postingan (Status HTTP ${res.status}).`,
+        };
+      }
+
+      if (res.ok && json?.success) {
         showNotification('success', json.message || 'Sinkronisasi postingan & video berhasil diperbarui!');
         await fetchPosts();
       } else {
-        showNotification('error', json.error || 'Gagal menyinkronkan postingan');
+        const errorMsg = json?.error || (res.status === 404 ? 'Tidak ditemukan akun aktif di workspace ini.' : 'Gagal menyinkronkan postingan');
+        showNotification('error', errorMsg);
       }
     } catch (e: any) {
-      showNotification('error', 'Terjadi kesalahan jaringan saat sinkronisasi');
+      showNotification('error', e.message || 'Terjadi kesalahan jaringan saat sinkronisasi');
     } finally {
       setIsSyncing(false);
     }
@@ -329,6 +670,16 @@ export default function SocialPostsPage() {
         (p.accountHandle || '').toLowerCase().includes(q)
     );
   }, [posts, searchQuery]);
+
+  // Client-Side Grid Pagination Calculations
+  const totalItems = filteredPosts.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
+  const validCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (validCurrentPage - 1) * itemsPerPage;
+  const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
+  const paginatedPosts = useMemo(() => {
+    return filteredPosts.slice(startIndex, endIndex);
+  }, [filteredPosts, startIndex, endIndex]);
 
   // Filtered Comments berdasarkan Sentiment Tab
   const filteredComments = useMemo(() => {
@@ -398,6 +749,21 @@ export default function SocialPostsPage() {
           )}
           <div className="flex-1 text-xs font-medium leading-relaxed">
             {notification.message}
+            {notification.type === 'error' && (
+              notification.message.includes('hubungkan ulang') ||
+              notification.message.includes('Manajemen & Integrasi') ||
+              notification.message.includes('kedaluwarsa')
+            ) && (
+              <div className="mt-2">
+                <Link
+                  href="/dashboard/projects"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-red-100 hover:bg-red-200 text-red-900 font-semibold transition-colors"
+                >
+                  <span>Buka Menu Manajemen & Integrasi untuk Hubungkan Ulang</span>
+                  <ExternalLink className="w-3 h-3" />
+                </Link>
+              </div>
+            )}
           </div>
           <button
             type="button"
@@ -470,7 +836,7 @@ export default function SocialPostsPage() {
       </div>
 
       {/* Main Content Browser Card */}
-      <div className="bg-white border border-zinc-200 rounded-xl shadow-xs overflow-hidden">
+      <div ref={catalogContainerRef} className="bg-white border border-zinc-200 rounded-xl shadow-xs overflow-hidden">
         {/* Toolbar Bar: Tabs, Account Switcher, Search, Sort */}
         <div className="p-4 border-b border-zinc-200 bg-zinc-50/60 space-y-3">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
@@ -544,14 +910,30 @@ export default function SocialPostsPage() {
                 onChange={(e) => setSortBy(e.target.value as any)}
                 className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-800 focus:outline-none focus:ring-1 focus:ring-zinc-400 cursor-pointer shadow-2xs"
               >
+                <option value="recent">Tanggal Rilis Terbaru</option>
                 <option value="views">Penayangan Terbanyak (Views)</option>
                 <option value="likes">Paling Disukai (Likes)</option>
                 <option value="comments">Komentar Terbanyak (Comments)</option>
-                <option value="recent">Tanggal Rilis Terbaru</option>
               </select>
             </div>
           </div>
         </div>
+
+        {/* Top Pagination Toolbar (Sandwich Header) */}
+        {!loading && filteredPosts.length > 0 && (
+          <PaginationBar
+            position="top"
+            totalItems={totalItems}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            itemsPerPage={itemsPerPage}
+            setItemsPerPage={setItemsPerPage}
+            currentPage={validCurrentPage}
+            setCurrentPage={setCurrentPage}
+            totalPages={totalPages}
+            onNavigateTop={scrollToCatalogTop}
+          />
+        )}
 
         {/* Content Cards Grid */}
         <div className="p-5">
@@ -576,7 +958,7 @@ export default function SocialPostsPage() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {filteredPosts.map((post) => {
+              {paginatedPosts.map((post) => {
                 const platformObj = SUPPORTED_PLATFORMS.find((p) => p.id === post.platform);
                 return (
                   <div
@@ -602,45 +984,15 @@ export default function SocialPostsPage() {
                         </span>
                       </div>
 
-                      {/* Preview Thumbnail / Media Container */}
-                      {post.thumbnailUrl ? (
-                        <div className="relative rounded-lg overflow-hidden bg-zinc-900 aspect-[3/4] group/thumb">
-                          {post.thumbnailUrl.includes('.mp4') ? (
-                            <video
-                              src={post.thumbnailUrl}
-                              className="w-full h-full object-cover"
-                              muted
-                              playsInline
-                              preload="metadata"
-                            />
-                          ) : (
-                            <img
-                              src={post.thumbnailUrl}
-                              alt={post.titleOrCaption}
-                              className="w-full h-full object-cover transition-transform duration-300 group-hover/thumb:scale-105"
-                              loading="lazy"
-                            />
-                          )}
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
-                          {post.additionalMetrics?.duration && (
-                            <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-xs text-[10px] font-mono font-semibold text-white">
-                              {post.additionalMetrics.duration}
-                            </span>
-                          )}
-                          {post.additionalMetrics?.media_type && (
-                            <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/70 backdrop-blur-xs text-[9px] font-semibold text-white uppercase">
-                              {post.additionalMetrics.media_type}
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="p-3.5 rounded-lg bg-zinc-50 border border-zinc-100 text-zinc-700 italic text-xs leading-relaxed min-h-[100px] flex items-center">
-                          <p className="line-clamp-4">"{post.titleOrCaption}"</p>
-                        </div>
-                      )}
+                      {/* Preview Thumbnail / Media Container (Defensive Anti-Black Box & On-Demand Refresh) */}
+                      <PostThumbnail 
+                        post={post} 
+                        platformObj={platformObj} 
+                        onThumbnailUpdated={handleThumbnailUpdated} 
+                      />
 
                       {/* Title / Caption */}
-                      {post.thumbnailUrl && (
+                      {post.titleOrCaption && (
                         <h3
                           className="font-bold text-xs text-zinc-900 line-clamp-2 leading-snug group-hover:text-indigo-600 transition-colors"
                           title={post.titleOrCaption}
@@ -728,6 +1080,22 @@ export default function SocialPostsPage() {
             </div>
           )}
         </div>
+
+        {/* Bottom Pagination Footer (Sandwich Footer) */}
+        {!loading && filteredPosts.length > 0 && (
+          <PaginationBar
+            position="bottom"
+            totalItems={totalItems}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            itemsPerPage={itemsPerPage}
+            setItemsPerPage={setItemsPerPage}
+            currentPage={validCurrentPage}
+            setCurrentPage={setCurrentPage}
+            totalPages={totalPages}
+            onNavigateTop={scrollToCatalogTop}
+          />
+        )}
       </div>
 
       {/* Modal Interaktif Komentar Masuk & Sentimen AI (Portal) */}

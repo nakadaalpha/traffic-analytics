@@ -29,6 +29,10 @@ const nextConfig: NextConfig = {
         source: '/api/webhooks/:path*',
         destination: `${backendUrl}/api/webhooks/:path*`,
       },
+      {
+        source: '/api/media/:path*',
+        destination: `${backendUrl}/api/media/:path*`,
+      },
     ];
   },
 };

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import {
   MessageSquare,
@@ -34,6 +34,7 @@ import {
   Globe,
   ArrowRight,
   FileText,
+  ChevronLeft,
   ChevronRight,
   Inbox,
   Tag,
@@ -42,6 +43,9 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   Copy,
+  Smartphone,
+  ChevronDown,
+  RotateCcw,
 } from "lucide-react";
 import { useProject } from "@/context/ProjectContext";
 
@@ -85,7 +89,42 @@ const QUICK_REPLY_TEMPLATES = [
   },
 ];
 
-type LeadPlatform = "whatsapp" | "instagram" | "facebook" | "gmail" | "website";
+const PRESET_LOST_REASONS = [
+  "Harga Belum Cocok / Budget Kurang",
+  "Memilih Kompetitor Lain",
+  "Ghosting / Tidak Ada Respon",
+  "Fitur / Spesifikasi Belum Sesuai",
+  "Hanya Riset / Belum Butuh Sekarang",
+  "Spam / Penawaran Iklan Luar",
+  "Kontak / Nomor Tidak Valid",
+];
+
+const HOT_LEAD_KEYWORDS = [
+  "harga",
+  "biaya",
+  "paket",
+  "promo",
+  "diskon",
+  "pricelist",
+  "price list",
+  "katalog",
+  "pesan",
+  "order",
+  "beli",
+  "transfer",
+  "rekening",
+  "bayar",
+  "langganan",
+  "proposal",
+  "quotation",
+  "demo",
+  "meeting",
+  "konsultasi",
+  "bisa kirim",
+  "ongkir",
+];
+
+type LeadPlatform = "whatsapp" | "instagram" | "facebook" | "tiktok" | "gmail" | "website";
 type LeadStatus =
   | "NEW"
   | "CONTACTED"
@@ -111,6 +150,8 @@ interface InboundLead {
   projectId: string;
   userId: string;
   connectionId: string | null;
+  recipientHandle?: string | null;
+  recipientLabel?: string | null;
   platform: LeadPlatform;
   externalSenderId: string;
   senderName: string | null;
@@ -413,12 +454,22 @@ function getConversationThread(lead: InboundLead | null | undefined): LeadNote[]
 
 interface LeadStats {
   totalLeads: number;
+  unfilteredTotalLeads?: number;
   newToday: number;
   followUpDueToday?: number;
   totalRevenue?: number;
   qualifiedRate: string;
   byPlatform: Record<string, number>;
   byStatus: Record<string, number>;
+}
+
+export interface ConnectedAccountItem {
+  id: string;
+  platform: string;
+  accountHandle?: string | null;
+  accountLabel?: string | null;
+  status: string;
+  leadCount?: number;
 }
 
 const KANBAN_STAGES: { status: LeadStatus; label: string; desc: string }[] = [
@@ -526,6 +577,61 @@ function getNoteCount(notesJson: string | null | undefined): number {
   }
 }
 
+// Speed-to-Lead SLA Calculator for uncontacted leads
+function getLeadSlaMeta(lead: InboundLead) {
+  if (lead.status !== "NEW" || isOutboundLeadMessage(lead)) {
+    return null;
+  }
+  const start = parseUtcDate(lead.firstContactAt || lead.createdAt);
+  if (!start) return null;
+
+  const now = new Date();
+  const diffMinutes = Math.max(0, Math.floor((now.getTime() - start.getTime()) / (60 * 1000)));
+
+  if (diffMinutes < 15) {
+    return {
+      level: "fresh",
+      label: "< 15m Baru",
+      fullText: "Respon Segar (<15m)",
+      badgeClass: "bg-emerald-50 text-emerald-700 border-emerald-200 font-medium",
+      dotClass: "bg-emerald-500",
+      isCritical: false,
+    };
+  } else if (diffMinutes < 60) {
+    return {
+      level: "pending",
+      label: `${diffMinutes}m lalu`,
+      fullText: `Menunggu Respon (${diffMinutes}m)`,
+      badgeClass: "bg-amber-50 text-amber-700 border-amber-200 font-medium",
+      dotClass: "bg-amber-500",
+      isCritical: false,
+    };
+  } else {
+    const hours = Math.floor(diffMinutes / 60);
+    const timeDisplay = hours < 24 ? `${hours}j lalu` : `${Math.floor(hours / 24)}h lalu`;
+    return {
+      level: "critical",
+      label: `> 1 jam (${timeDisplay})`,
+      fullText: `SLA Kritis (>1 jam - ${timeDisplay})`,
+      badgeClass: "bg-rose-50 text-rose-700 border-rose-200 font-semibold",
+      dotClass: "bg-rose-500",
+      isCritical: true,
+    };
+  }
+}
+
+function isHotLead(lead: InboundLead): boolean {
+  if (Number(lead.dealValue) > 0) return true;
+
+  const textToScan = [
+    lead.lastMessage || "",
+    lead.notes || "",
+    lead.metadata?.initialInquiry || "",
+  ].join(" ").toLowerCase();
+
+  return HOT_LEAD_KEYWORDS.some((kw) => textToScan.includes(kw));
+}
+
 function getPlatformMeta(platform: string) {
   switch (platform.toLowerCase()) {
     case "whatsapp":
@@ -561,6 +667,18 @@ function getPlatformMeta(platform: string) {
         icon: (
           <svg className="w-4 h-4 fill-[#1877F2]" viewBox="0 0 24 24">
             <path d="M12 2C6.477 2 2 6.145 2 11.258c0 2.91 1.455 5.512 3.736 7.18V22l3.435-1.884c.899.25 1.854.384 2.829.384 5.523 0 10-4.145 10-9.258C22 6.145 17.523 2 12 2zm1.066 12.434l-2.716-2.898-5.3 2.898 5.83-6.19 2.784 2.898 5.232-2.898-5.83 6.19z" />
+          </svg>
+        ),
+      };
+    case "tiktok":
+      return {
+        name: "TikTok",
+        badgeClass: "bg-zinc-900 text-white border-zinc-800",
+        dotColor: "bg-cyan-400",
+        textColor: "text-zinc-900",
+        icon: (
+          <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+            <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1.04-.1z" />
           </svg>
         ),
       };
@@ -683,9 +801,10 @@ function getStatusMeta(status: LeadStatus) {
 function getChatLink(lead: InboundLead): string {
   switch (lead.platform) {
     case "whatsapp": {
-      const cleanPhone = lead.externalSenderId.replace(/[^0-9]/g, "");
+      const cleanDigits = lead.externalSenderId.replace(/[^0-9]/g, "");
+      const waPhone = cleanDigits.startsWith("0") ? "62" + cleanDigits.slice(1) : cleanDigits;
       const greeting = `Halo Kak ${lead.senderName || ""}, terima kasih telah menghubungi kami. Terkait inquiry Anda "${(lead.lastMessage || "").slice(0, 45)}...", ada yang bisa kami bantu?`;
-      return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(greeting.trim())}`;
+      return `https://wa.me/${waPhone}?text=${encodeURIComponent(greeting.trim())}`;
     }
     case "instagram": {
       const cleanHandle = (lead.senderHandle || "").replace(/^@/, "").trim();
@@ -708,6 +827,19 @@ function getChatLink(lead: InboundLead): string {
     }
     case "facebook": {
       return `https://m.me/${lead.externalSenderId}`;
+    }
+    case "tiktok": {
+      const cleanPhone = (lead.senderHandle || lead.externalSenderId || "").replace(/[^0-9]/g, "");
+      if (cleanPhone.length >= 9) {
+        const waPhone = cleanPhone.startsWith("0") ? "62" + cleanPhone.slice(1) : cleanPhone;
+        const greeting = `Halo Kak ${lead.senderName || ""}, terima kasih telah menghubungi kami via TikTok. Terkait inquiry Anda "${(lead.lastMessage || "").slice(0, 45)}...", ada yang bisa kami bantu?`;
+        return `https://wa.me/${waPhone}?text=${encodeURIComponent(greeting.trim())}`;
+      }
+      const cleanHandle = (lead.senderHandle || lead.externalSenderId || "").replace(/^@/, "").trim();
+      if (cleanHandle && !/^\d+$/.test(cleanHandle)) {
+        return `https://www.tiktok.com/@${encodeURIComponent(cleanHandle)}`;
+      }
+      return "https://www.tiktok.com/messages?lang=id";
     }
     case "gmail": {
       const email = lead.senderHandle || lead.externalSenderId;
@@ -752,6 +884,15 @@ function getProfileLink(lead: InboundLead): string | null {
       }
       return null;
     }
+    case "tiktok": {
+      const handle = (lead.senderHandle || lead.externalSenderId || "")
+        .replace(/^@/, "")
+        .trim();
+      if (handle && !/^\d+$/.test(handle)) {
+        return `https://www.tiktok.com/@${encodeURIComponent(handle)}`;
+      }
+      return null;
+    }
     case "website": {
       if (lead.senderHandle && lead.senderHandle.includes("@")) {
         return `mailto:${lead.senderHandle}`;
@@ -763,8 +904,134 @@ function getProfileLink(lead: InboundLead): string | null {
   }
 }
 
+// -------------------------------------------------------------
+// Component: Reusable Table Pagination Bar (Top & Bottom Sandwich)
+// -------------------------------------------------------------
+function LeadTablePaginationBar({
+  position,
+  totalItems,
+  startIndex,
+  endIndex,
+  limit,
+  setLimit,
+  currentPage,
+  setCurrentPage,
+  totalPages,
+  onNavigateTop,
+}: {
+  position: "top" | "bottom";
+  totalItems: number;
+  startIndex: number;
+  endIndex: number;
+  limit: number;
+  setLimit: (val: number) => void;
+  currentPage: number;
+  setCurrentPage: React.Dispatch<React.SetStateAction<number>>;
+  totalPages: number;
+  onNavigateTop?: () => void;
+}) {
+  return (
+    <div
+      className={`${
+        position === "top"
+          ? "border-b border-zinc-200/90 bg-zinc-50/40"
+          : "border-t border-zinc-200 bg-white"
+      } px-4 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs`}
+    >
+      {/* Kiri: Ringkasan Data */}
+      <div className="text-zinc-500 font-medium text-center sm:text-left">
+        Menampilkan{" "}
+        <span className="font-semibold text-zinc-900">
+          {totalItems === 0 ? 0 : startIndex + 1}
+        </span>{" "}
+        -{" "}
+        <span className="font-semibold text-zinc-900">{endIndex}</span> dari{" "}
+        <span className="font-semibold text-zinc-900">{totalItems}</span> prospek
+      </div>
+
+      {/* Kanan: Pilihan Baris per Halaman + Navigasi Halaman */}
+      <div className="flex items-center gap-3 sm:gap-4 flex-wrap justify-center">
+        {/* Selector Limit per Page */}
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-500 text-[11px] whitespace-nowrap">
+            Baris per halaman:
+          </span>
+          <select
+            value={limit}
+            onChange={(e) => {
+              setLimit(Number(e.target.value));
+              setCurrentPage(1);
+              if (position === "bottom") {
+                onNavigateTop?.();
+              }
+            }}
+            className="text-xs font-semibold px-2 py-1 rounded-md border border-zinc-200 bg-white text-zinc-800 hover:border-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-900 cursor-pointer shadow-2xs transition-colors"
+          >
+            <option value={10}>10</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </div>
+
+        <div className="h-4 w-px bg-zinc-200 hidden sm:block" />
+
+        {/* Navigasi Prev / Page Indicator / Next */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              setCurrentPage((p) => Math.max(1, p - 1));
+              if (position === "bottom") {
+                onNavigateTop?.();
+              }
+            }}
+            disabled={currentPage <= 1}
+            className="px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-xs font-medium flex items-center gap-1 shadow-2xs cursor-pointer"
+            title="Halaman Sebelumnya"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Sebelumnya</span>
+          </button>
+
+          <div className="px-2.5 py-1 text-xs font-semibold text-zinc-700 bg-zinc-100 rounded-md border border-zinc-200/80">
+            Hal {currentPage} dari {totalPages}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setCurrentPage((p) => Math.min(totalPages, p + 1));
+              if (position === "bottom") {
+                onNavigateTop?.();
+              }
+            }}
+            disabled={currentPage >= totalPages}
+            className="px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-xs font-medium flex items-center gap-1 shadow-2xs cursor-pointer"
+            title="Halaman Berikutnya"
+          >
+            <span className="hidden sm:inline">Berikutnya</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function LeadsPage() {
   const { currentProject } = useProject();
+
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const tableScrollContainerRef = useRef<HTMLDivElement>(null);
+
+  const scrollToTableTop = () => {
+    if (tableContainerRef.current) {
+      const yOffset = -85; // 64px header + 21px buffer
+      const y = tableContainerRef.current.getBoundingClientRect().top + window.pageYOffset + yOffset;
+      window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
+    }
+  };
 
   const [leads, setLeads] = useState<InboundLead[]>([]);
   const [stats, setStats] = useState<LeadStats>({
@@ -782,12 +1049,27 @@ export default function LeadsPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [selectedPlatform, setSelectedPlatform] = useState<string>("all");
+  const [selectedConnectionId, setSelectedConnectionId] = useState<string>("all");
+  const [connections, setConnections] = useState<ConnectedAccountItem[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedLead, setSelectedLead] = useState<InboundLead | null>(null);
 
   // View Switcher (Kanban vs Table) & Follow-up Filter
   const [viewMode, setViewMode] = useState<"kanban" | "table">("kanban");
   const [filterDueToday, setFilterDueToday] = useState(false);
+
+  // Table Pagination State (Paginasi Data Mode Tabel)
+  const [tablePage, setTablePage] = useState(1);
+  const [tableLimit, setTableLimit] = useState(10);
+
+  // Filter Cepat SLA Kritis (> 1 Jam Belum Dihubungi)
+  const [filterSlaCritical, setFilterSlaCritical] = useState(false);
+
+  // Lost Reason Modal State
+  const [pendingLostLead, setPendingLostLead] = useState<InboundLead | null>(null);
+  const [selectedLostReason, setSelectedLostReason] = useState<string>(PRESET_LOST_REASONS[0]);
+  const [customLostReason, setCustomLostReason] = useState<string>("");
+  const [isSubmittingLost, setIsSubmittingLost] = useState<boolean>(false);
 
   // Debounce search input untuk sinkronisasi data latar belakang tanpa memblokir UI
   useEffect(() => {
@@ -909,15 +1191,22 @@ export default function LeadsPage() {
         if (currentProject?.id) params.set("projectId", currentProject.id);
         if (selectedPlatform && selectedPlatform !== "all")
           params.set("platform", selectedPlatform);
+        if (selectedConnectionId && selectedConnectionId !== "all")
+          params.set("connectionId", selectedConnectionId);
         if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
 
-        const res = await fetch(`/api/composio/leads?${params.toString()}`);
+        const res = await fetch(`/api/composio/leads?${params.toString()}`, {
+          credentials: "include",
+        });
         const data = await res.json().catch(() => ({}));
 
         if (data.success && data.data) {
           setLeads(data.data.leads || []);
           if (data.data.stats || data.data.summary) {
             setStats(data.data.stats || data.data.summary);
+          }
+          if (Array.isArray(data.data.connections)) {
+            setConnections(data.data.connections);
           }
         }
       } catch (err: any) {
@@ -927,7 +1216,7 @@ export default function LeadsPage() {
         setIsSearching(false);
       }
     },
-    [currentProject?.id, selectedPlatform, debouncedSearch],
+    [currentProject?.id, selectedPlatform, selectedConnectionId, debouncedSearch],
   );
 
   useEffect(() => {
@@ -943,20 +1232,45 @@ export default function LeadsPage() {
       const res = await fetch("/api/composio/leads/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ projectId: currentProject?.id }),
       });
-      const data = await res.json().catch(() => ({}));
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = {
+          error:
+            res.status === 504
+              ? "Proses sinkronisasi pesan membutuhkan waktu lebih lama dan sedang dilanjutkan di latar belakang."
+              : res.status === 502
+              ? "Server backend sedang memulai ulang. Silakan coba kembali dalam beberapa saat."
+              : res.status === 401
+              ? "Sesi login telah kedaluwarsa. Silakan muat ulang halaman."
+              : `Gagal menyinkronkan prospek (Status HTTP ${res.status}).`,
+        };
+      }
 
-      if (data.success) {
-        showNotification(
-          "success",
-          data.message || "Sinkronisasi prospek multi-channel berhasil!",
-        );
+      if (data?.success) {
+        let successMsg = data.message || "Sinkronisasi prospek multi-channel berhasil!";
+        if (selectedConnectionId !== "all") {
+          const activeConn = connections.find((c) => c.id === selectedConnectionId);
+          const activeLabel =
+            activeConn?.accountHandle ||
+            activeConn?.accountLabel ||
+            "akun terpilih";
+          if (data.syncedCount !== undefined) {
+            successMsg = `${data.syncedCount} percakapan berhasil disinkronkan ke database (Filter aktif: ${activeLabel})`;
+          } else {
+            successMsg += ` (Filter aktif: ${activeLabel})`;
+          }
+        }
+        showNotification("success", successMsg);
         await fetchLeads();
       } else {
         showNotification(
           "error",
-          data.error || "Gagal menyinkronkan leads dari platform terhubung",
+          data?.error || data?.message || "Gagal menyinkronkan leads dari platform terhubung",
         );
       }
     } catch (err: any) {
@@ -966,13 +1280,39 @@ export default function LeadsPage() {
     }
   };
 
-  // Quick Status Change with Optimistic UI Update
-  const handleStatusChange = async (leadId: string, nextStatus: LeadStatus) => {
+  // Quick Status Change with Optimistic UI Update & Lost Reason Interception
+  const handleStatusChange = async (
+    leadId: string,
+    nextStatus: LeadStatus,
+    lostReason?: string,
+  ) => {
+    // Intersepsi: Jika status diubah ke LOST tanpa alasan, buka modal konfirmasi alasan batal
+    if (nextStatus === "LOST" && !lostReason) {
+      const target = leads.find((l) => l.id === leadId);
+      if (target) {
+        setPendingLostLead(target);
+        setSelectedLostReason(PRESET_LOST_REASONS[0]);
+        setCustomLostReason("");
+        return;
+      }
+    }
+
     const prevLeads = [...leads];
     setLeads((prev) =>
       prev.map((lead) =>
         lead.id === leadId
-          ? { ...lead, status: nextStatus, unread: false }
+          ? {
+              ...lead,
+              status: nextStatus,
+              unread: false,
+              metadata: lostReason
+                ? {
+                    ...lead.metadata,
+                    lostReason,
+                    lostAt: new Date().toISOString(),
+                  }
+                : lead.metadata,
+            }
           : lead,
       ),
     );
@@ -981,7 +1321,12 @@ export default function LeadsPage() {
       const res = await fetch(`/api/composio/leads/${leadId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: nextStatus, unread: false }),
+        credentials: "include",
+        body: JSON.stringify({
+          status: nextStatus,
+          unread: false,
+          lostReason: lostReason || undefined,
+        }),
       });
       const data = await res.json().catch(() => ({}));
 
@@ -991,17 +1336,38 @@ export default function LeadsPage() {
       } else {
         if (selectedLead?.id === leadId) {
           setSelectedLead((curr) =>
-            curr ? { ...curr, status: nextStatus, unread: false } : null,
+            curr
+              ? {
+                  ...curr,
+                  status: nextStatus,
+                  unread: false,
+                  metadata: lostReason
+                    ? {
+                        ...curr.metadata,
+                        lostReason,
+                        lostAt: new Date().toISOString(),
+                      }
+                    : curr.metadata,
+                }
+              : null,
           );
         }
+        showNotification(
+          "success",
+          lostReason
+            ? `Prospek ditandai Batal (${lostReason})`
+            : `Status diperbarui ke ${getStatusMeta(nextStatus).label}`,
+        );
       }
     } catch {
       setLeads(prevLeads);
       showNotification("error", "Gagal terhubung ke server");
+    } finally {
+      setPendingLostLead(null);
     }
   };
 
-  // Toggle Unread State
+  // Toggle Unread State with Native Status Synchronization feedback
   const handleToggleUnread = async (lead: InboundLead) => {
     const nextUnread = !lead.unread;
     setLeads((prev) =>
@@ -1012,6 +1378,7 @@ export default function LeadsPage() {
       await fetch(`/api/composio/leads/${lead.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ unread: nextUnread }),
       });
       if (selectedLead?.id === lead.id) {
@@ -1019,11 +1386,18 @@ export default function LeadsPage() {
           curr ? { ...curr, unread: nextUnread } : null,
         );
       }
+      showNotification(
+        "success",
+        nextUnread
+          ? "Pesan ditandai sebagai 'Belum Dibaca'."
+          : "Pesan ditandai sebagai 'Sudah Dibaca' dan disinkronkan ke platform native.",
+      );
     } catch {
       // Revert if error
       setLeads((prev) =>
         prev.map((l) => (l.id === lead.id ? { ...l, unread: lead.unread } : l)),
       );
+      showNotification("error", "Gagal memperbarui status baca prospek.");
     }
   };
 
@@ -1048,6 +1422,7 @@ export default function LeadsPage() {
     try {
       const res = await fetch(`/api/composio/leads/${leadId}`, {
         method: "DELETE",
+        credentials: "include",
       });
       const data = await res.json().catch(() => ({}));
 
@@ -1071,15 +1446,31 @@ export default function LeadsPage() {
       return;
     }
 
+    let senderIdToSubmit = addSenderId.trim();
+    if (addPlatform === "whatsapp") {
+      const cleanDigits = senderIdToSubmit.replace(/[^0-9]/g, "");
+      if (cleanDigits.startsWith("0")) {
+        senderIdToSubmit = "62" + cleanDigits.slice(1);
+      } else if (cleanDigits.length > 0) {
+        senderIdToSubmit = cleanDigits;
+      }
+    } else if (addPlatform === "tiktok") {
+      const cleanDigits = senderIdToSubmit.replace(/[^0-9]/g, "");
+      if (cleanDigits.length >= 9 && cleanDigits.startsWith("0")) {
+        senderIdToSubmit = "62" + cleanDigits.slice(1);
+      }
+    }
+
     try {
       setSubmittingAdd(true);
       const res = await fetch("/api/composio/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           projectId: currentProject?.id || "prj_default",
           platform: addPlatform,
-          externalSenderId: addSenderId.trim(),
+          externalSenderId: senderIdToSubmit,
           senderName: addSenderName.trim() || undefined,
           senderHandle: addSenderHandle.trim() || undefined,
           lastMessage: addMessage.trim() || undefined,
@@ -1126,6 +1517,7 @@ export default function LeadsPage() {
       const res = await fetch(`/api/composio/leads/${leadId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ appendNote: newNoteText.trim() }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1175,8 +1567,9 @@ export default function LeadsPage() {
     // If dispatching via App (Deep Link):
     if (!directSend) {
       if (selectedLead.platform === "whatsapp") {
-        const cleanPhone = selectedLead.externalSenderId.replace(/[^0-9]/g, "");
-        const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msgToSend)}`;
+        const cleanDigits = selectedLead.externalSenderId.replace(/[^0-9]/g, "");
+        const waPhone = cleanDigits.startsWith("0") ? "62" + cleanDigits.slice(1) : cleanDigits;
+        const waUrl = `https://wa.me/${waPhone}?text=${encodeURIComponent(msgToSend)}`;
         window.open(waUrl, "_blank", "noopener,noreferrer");
       } else if (selectedLead.platform === "gmail") {
         const email = selectedLead.senderHandle || selectedLead.externalSenderId;
@@ -1204,6 +1597,7 @@ export default function LeadsPage() {
       const res = await fetch(`/api/composio/leads/${selectedLead.id}/reply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           message: msgToSend,
           directSend: directSend,
@@ -1335,6 +1729,7 @@ export default function LeadsPage() {
       const res = await fetch(`/api/composio/leads/${leadId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           dealValue: Number(editDealValue) || 0,
           nextFollowUpAt: editFollowUpDate
@@ -1371,6 +1766,11 @@ export default function LeadsPage() {
   const filteredLeads = useMemo(() => {
     let result = leads;
 
+    // Filter Akun Tertentu (Multi-Account Scoping)
+    if (selectedConnectionId !== "all") {
+      result = result.filter((l) => l.connectionId === selectedConnectionId);
+    }
+
     // Filter Status Terpadu (Unified Status Segmented Filter)
     if (statusFilter === "uncontacted") {
       result = result.filter(
@@ -1397,6 +1797,14 @@ export default function LeadsPage() {
       });
     }
 
+    // Filter Cepat: SLA Kritis (> 1 Jam Belum Dihubungi)
+    if (filterSlaCritical) {
+      result = result.filter((l) => {
+        const sla = getLeadSlaMeta(l);
+        return sla?.isCritical === true;
+      });
+    }
+
     // Filter Pencarian Klien Instan (Respons 60fps seketika tanpa loading yang mengganggu)
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
@@ -1417,11 +1825,66 @@ export default function LeadsPage() {
     }
 
     return result;
-  }, [leads, filterDueToday, searchQuery, statusFilter]);
+  }, [leads, filterDueToday, filterSlaCritical, searchQuery, statusFilter, selectedConnectionId]);
 
-  // Export to CSV
+  // Auto-reset halaman tabel ke 1 setiap kali filter atau pencarian diubah
+  useEffect(() => {
+    setTablePage(1);
+    if (tableScrollContainerRef.current) {
+      tableScrollContainerRef.current.scrollLeft = 0;
+    }
+  }, [selectedPlatform, selectedConnectionId, statusFilter, filterDueToday, filterSlaCritical, searchQuery, viewMode]);
+
+  // Pastikan posisi scroll horizontal tabel selalu di paling kiri saat berganti halaman tabel
+  useEffect(() => {
+    if (tableScrollContainerRef.current) {
+      tableScrollContainerRef.current.scrollLeft = 0;
+    }
+  }, [tablePage]);
+
+  // Kalkulasi Paginasi untuk Mode Tabel
+  const totalTableItems = filteredLeads.length;
+  const totalTablePages = Math.max(1, Math.ceil(totalTableItems / tableLimit));
+  const validTablePage = Math.min(tablePage, totalTablePages);
+  const tableStartIndex = (validTablePage - 1) * tableLimit;
+  const tableEndIndex = Math.min(tableStartIndex + tableLimit, totalTableItems);
+
+  const paginatedTableLeads = useMemo(() => {
+    return filteredLeads.slice(tableStartIndex, tableEndIndex);
+  }, [filteredLeads, tableStartIndex, tableEndIndex]);
+
+  // Available connected accounts for currently selected platform
+  const availableConnections = useMemo(() => {
+    if (selectedPlatform === "all") return connections;
+    return connections.filter(
+      (c) => (c.platform || "").toLowerCase() === selectedPlatform.toLowerCase(),
+    );
+  }, [connections, selectedPlatform]);
+
+  // Format Notes string/JSON for clean single-line CSV output
+  const formatNotesForCsv = (notesStr: string | null | undefined): string => {
+    if (!notesStr) return "";
+    try {
+      const parsed = JSON.parse(notesStr);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((n: any) =>
+            n.text
+              ? `[${n.createdAt ? n.createdAt.slice(0, 10) : ""}] ${n.text}`
+              : String(n),
+          )
+          .join(" | ");
+      }
+      return String(notesStr);
+    } catch {
+      return String(notesStr);
+    }
+  };
+
+  // Export to CSV with full CRM fields (Nilai Deal, Follow-up, Notes, Akun Penerima)
   const handleExportCsv = () => {
-    if (leads.length === 0) {
+    const targetData = filteredLeads.length > 0 ? filteredLeads : leads;
+    if (targetData.length === 0) {
       alert("Tidak ada data leads untuk diekspor.");
       return;
     }
@@ -1431,22 +1894,30 @@ export default function LeadsPage() {
       "Platform",
       "Sender Name",
       "Contact/Handle",
+      "Akun Penerima (Handle)",
       "Last Message",
-      "Status",
+      "Status Pipeline",
+      "Nilai Deal (IDR)",
+      "Jadwal Follow-up",
       "Attribution",
+      "Catatan Tim",
       "First Contact",
       "Last Contact",
     ];
-    const rows = leads.map((l) => [
+    const rows = targetData.map((l) => [
       `"${l.id}"`,
       `"${l.platform}"`,
       `"${(l.senderName || "").replace(/"/g, '""')}"`,
       `"${(l.senderHandle || l.externalSenderId || "").replace(/"/g, '""')}"`,
-      `"${(l.lastMessage || "").replace(/"/g, '""').replace(/\n/g, " ")}"`,
+      `"${(l.recipientHandle || l.recipientLabel || "-").replace(/"/g, '""')}"`,
+      `"${(l.lastMessage || "").replace(/"/g, '""').replace(/\r?\n/g, " ")}"`,
       `"${l.status}"`,
+      `"${l.dealValue ? Number(l.dealValue) : 0}"`,
+      `"${l.nextFollowUpAt || "-"}"`,
       `"${(l.sourceAttribution || "").replace(/"/g, '""')}"`,
-      `"${l.firstContactAt}"`,
-      `"${l.lastContactAt}"`,
+      `"${formatNotesForCsv(l.notes).replace(/"/g, '""').replace(/\r?\n/g, " ")}"`,
+      `"${l.firstContactAt || "-"}"`,
+      `"${l.lastContactAt || "-"}"`,
     ]);
 
     const csvContent =
@@ -1491,274 +1962,219 @@ export default function LeadsPage() {
     ).length;
   }, [leads]);
 
-  // Reusable 2-Row Balanced Toolbar (Gambar 1 Refinement)
-  const renderToolbar = () => (
-    <div className="p-4 space-y-3.5">
-      {/* Baris 1: Macro Controls (Platform Tabs di Kiri + Segmented Switcher di Kanan) */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        {/* Platform Tabs */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
-          <button
-            type="button"
-            onClick={() => setSelectedPlatform("all")}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors flex items-center gap-1.5 cursor-pointer ${
-              selectedPlatform === "all"
-                ? "bg-zinc-900 text-white shadow-sm"
-                : "bg-zinc-100 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/80"
-            }`}
-          >
-            <span>Semua Saluran</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-white/20 text-current">
-              {stats.totalLeads}
-            </span>
-          </button>
+  // Statistik Prospek SLA Kritis (> 1 Jam Belum Dihubungi)
+  const criticalUncontactedCount = useMemo(() => {
+    return leads.filter((l) => {
+      const sla = getLeadSlaMeta(l);
+      return sla?.isCritical === true;
+    }).length;
+  }, [leads]);
 
-          {(
-            [
-              "whatsapp",
-              "instagram",
-              "facebook",
-              "gmail",
-              "website",
-            ] as LeadPlatform[]
-          ).map((plat) => {
-            const meta = getPlatformMeta(plat);
-            const count = stats.byPlatform?.[plat] || 0;
-            const isSelected = selectedPlatform === plat;
+  // Statistik Prospek Hot Lead
+  const hotLeadsCount = useMemo(() => {
+    return leads.filter((l) => isHotLead(l)).length;
+  }, [leads]);
 
-            return (
-              <button
-                key={plat}
-                type="button"
-                onClick={() => setSelectedPlatform(plat)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors flex items-center gap-1.5 border cursor-pointer ${
-                  isSelected
-                    ? "border-zinc-900 bg-zinc-900 text-white shadow-sm"
-                    : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
-                }`}
-              >
-                {meta.icon}
-                <span>{meta.name}</span>
-                <span
-                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-semibold ${
-                    isSelected
-                      ? "bg-white/20 text-white"
-                      : "bg-zinc-100 text-zinc-600"
-                  }`}
-                >
-                  {count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+  // Option A: Modular SaaS Filter Bar (Single Consolidated Responsive Row)
+  const renderToolbar = () => {
+    const hasActiveFilters =
+      selectedPlatform !== "all" ||
+      selectedConnectionId !== "all" ||
+      statusFilter !== "all" ||
+      filterDueToday ||
+      filterSlaCritical ||
+      Boolean(searchQuery.trim());
 
-        {/* View Mode Segmented Switcher (Kanban | Tabel) */}
-        <div className="flex items-center p-0.5 rounded-lg border border-zinc-200 bg-zinc-100 text-xs shadow-2xs shrink-0 self-start sm:self-auto">
-          <button
-            type="button"
-            onClick={() => setViewMode("kanban")}
-            className={`px-3 py-1.5 rounded-md font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
-              viewMode === "kanban"
-                ? "bg-white text-zinc-900 shadow-xs font-semibold"
-                : "text-zinc-500 hover:text-zinc-900"
-            }`}
-            title="Tampilan Papan Kanban"
-          >
-            <LayoutGrid className="w-3.5 h-3.5" />
-            <span>Kanban</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode("table")}
-            className={`px-3 py-1.5 rounded-md font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
-              viewMode === "table"
-                ? "bg-white text-zinc-900 shadow-xs font-semibold"
-                : "text-zinc-500 hover:text-zinc-900"
-            }`}
-            title="Tampilan Daftar Tabel"
-          >
-            <List className="w-3.5 h-3.5" />
-            <span>Tabel</span>
-          </button>
-        </div>
-      </div>
+    const activeConn = connections.find((c) => c.id === selectedConnectionId);
+    const activeConnLabel =
+      activeConn?.accountHandle || activeConn?.accountLabel || "Akun Terpilih";
 
-      {/* Baris 2: Micro Filters & Search (Quick Contact Segments + Status Filter + Search Bar) */}
-      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 pt-3 border-t border-zinc-100">
-        <div className="flex items-center gap-2 overflow-x-auto scrollbar-none">
-          {/* Unified Status Segmented Control */}
-          <div className="h-9 flex items-center p-0.5 rounded-lg border border-zinc-200 bg-zinc-100 text-[11px] shrink-0 shadow-2xs">
-            {/* Tab: Semua */}
+    return (
+      <div className="flex flex-col bg-white">
+        <div className="p-3 sm:p-3.5 flex flex-wrap items-center justify-between gap-2.5">
+          {/* Left Section: View Mode Switcher + Modular Filter Dropdown Pills */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* View Mode Segmented Switcher (Kanban | Tabel) */}
+          <div className="flex items-center p-0.5 rounded-lg border border-zinc-200 bg-zinc-100 text-xs shadow-2xs shrink-0">
             <button
               type="button"
-              onClick={() => setStatusFilter("all")}
-              className={`h-full flex items-center gap-1.5 px-3 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
-                statusFilter === "all"
-                  ? "bg-white text-zinc-900 shadow-2xs font-semibold"
-                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
+              onClick={() => setViewMode("kanban")}
+              className={`px-2.5 py-1.5 rounded-md font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
+                viewMode === "kanban"
+                  ? "bg-white text-zinc-900 shadow-xs font-semibold"
+                  : "text-zinc-500 hover:text-zinc-900"
               }`}
+              title="Tampilan Papan Kanban"
             >
-              <span>Semua</span>
-              <span
-                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
-                  statusFilter === "all"
-                    ? "bg-zinc-900 text-white"
-                    : "bg-zinc-200 text-zinc-700"
-                }`}
-              >
-                {leads.length}
-              </span>
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Kanban</span>
             </button>
-
-            {/* Tab: Belum Dihubungi */}
             <button
               type="button"
-              onClick={() => setStatusFilter("uncontacted")}
-              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
-                statusFilter === "uncontacted"
-                  ? "bg-white text-amber-900 shadow-2xs font-semibold"
-                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
+              onClick={() => setViewMode("table")}
+              className={`px-2.5 py-1.5 rounded-md font-medium flex items-center gap-1.5 transition-all cursor-pointer ${
+                viewMode === "table"
+                  ? "bg-white text-zinc-900 shadow-xs font-semibold"
+                  : "text-zinc-500 hover:text-zinc-900"
               }`}
-              title="Tampilkan hanya prospek baru yang belum pernah dihubungi"
+              title="Tampilan Daftar Tabel"
             >
-              <Clock className="w-3 h-3 text-amber-600 shrink-0" />
-              <span>Belum Dihubungi</span>
-              <span
-                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
-                  statusFilter === "uncontacted"
-                    ? "bg-amber-600 text-white font-bold"
-                    : "bg-amber-100 text-amber-800 font-semibold"
-                }`}
-              >
-                {uncontactedCount}
-              </span>
-            </button>
-
-            {/* Tab: Sudah Dihubungi */}
-            <button
-              type="button"
-              onClick={() => setStatusFilter("contacted")}
-              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
-                statusFilter === "contacted"
-                  ? "bg-white text-blue-900 shadow-2xs font-semibold"
-                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
-              }`}
-              title="Tampilkan prospek yang sedang dalam komunikasi / outreach aktif"
-            >
-              <CheckCircle2 className="w-3 h-3 text-blue-600 shrink-0" />
-              <span>Sudah Dihubungi</span>
-              <span
-                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
-                  statusFilter === "contacted"
-                    ? "bg-blue-600 text-white font-bold"
-                    : "bg-blue-100 text-blue-800 font-semibold"
-                }`}
-              >
-                {contactedCount}
-              </span>
-            </button>
-
-            {/* Tab: Kualifikasi */}
-            <button
-              type="button"
-              onClick={() => setStatusFilter("QUALIFIED")}
-              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
-                statusFilter === "QUALIFIED"
-                  ? "bg-white text-purple-900 shadow-2xs font-semibold"
-                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
-              }`}
-              title="Tahap kualifikasi kebutuhan & anggaran"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />
-              <span>Kualifikasi</span>
-              <span
-                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
-                  statusFilter === "QUALIFIED"
-                    ? "bg-purple-600 text-white font-bold"
-                    : "bg-purple-100 text-purple-800 font-semibold"
-                }`}
-              >
-                {stats.byStatus?.QUALIFIED || 0}
-              </span>
-            </button>
-
-            {/* Tab: Negosiasi */}
-            <button
-              type="button"
-              onClick={() => setStatusFilter("NEGOTIATION")}
-              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
-                statusFilter === "NEGOTIATION"
-                  ? "bg-white text-amber-900 shadow-2xs font-semibold"
-                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
-              }`}
-              title="Tahap negosiasi penawaran harga & proposal"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-              <span>Negosiasi</span>
-              <span
-                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
-                  statusFilter === "NEGOTIATION"
-                    ? "bg-amber-600 text-white font-bold"
-                    : "bg-amber-100 text-amber-800 font-semibold"
-                }`}
-              >
-                {stats.byStatus?.NEGOTIATION || 0}
-              </span>
-            </button>
-
-            {/* Tab: Deal / Won */}
-            <button
-              type="button"
-              onClick={() => setStatusFilter("CONVERTED")}
-              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
-                statusFilter === "CONVERTED"
-                  ? "bg-white text-emerald-900 shadow-2xs font-semibold"
-                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
-              }`}
-              title="Prospek berhasil closing / deal"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-              <span>Deal</span>
-              <span
-                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
-                  statusFilter === "CONVERTED"
-                    ? "bg-emerald-600 text-white font-bold"
-                    : "bg-emerald-100 text-emerald-800 font-semibold"
-                }`}
-              >
-                {stats.byStatus?.CONVERTED || 0}
-              </span>
-            </button>
-
-            {/* Tab: Lost / Batal */}
-            <button
-              type="button"
-              onClick={() => setStatusFilter("LOST")}
-              className={`h-full flex items-center gap-1.5 px-2.5 rounded-md transition-all cursor-pointer font-medium whitespace-nowrap ${
-                statusFilter === "LOST"
-                  ? "bg-white text-zinc-900 shadow-2xs font-semibold"
-                  : "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/50"
-              }`}
-              title="Prospek batal atau ditandai spam"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 shrink-0" />
-              <span>Lost</span>
-              <span
-                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-mono leading-none transition-colors ${
-                  statusFilter === "LOST"
-                    ? "bg-zinc-800 text-white font-bold"
-                    : "bg-zinc-200 text-zinc-700 font-semibold"
-                }`}
-              >
-                {(stats.byStatus?.LOST || 0) + (stats.byStatus?.SPAM || 0)}
-              </span>
+              <List className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Tabel</span>
             </button>
           </div>
+
+          <div className="h-4 w-px bg-zinc-200 mx-0.5 hidden sm:block" />
+
+          {/* 1. Saluran Filter Dropdown Pill */}
+          <div className="relative inline-flex items-center">
+            <Globe className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 pointer-events-none" />
+            <select
+              value={selectedPlatform}
+              onChange={(e) => setSelectedPlatform(e.target.value)}
+              className={`appearance-none pl-8 pr-7 py-1.5 text-xs rounded-lg border cursor-pointer shadow-2xs transition-colors focus:outline-none focus:ring-1 focus:ring-zinc-900 ${
+                selectedPlatform !== "all"
+                  ? "border-zinc-900 bg-zinc-50 text-zinc-900 font-semibold"
+                  : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 font-medium"
+              }`}
+              title="Saring berdasarkan saluran prospek (WhatsApp, Instagram, TikTok, dll)"
+            >
+              <option value="all">Semua Saluran ({stats.totalLeads})</option>
+              <option value="whatsapp">WhatsApp ({stats.byPlatform?.whatsapp || 0})</option>
+              <option value="instagram">Instagram DM ({stats.byPlatform?.instagram || 0})</option>
+              <option value="tiktok">TikTok ({stats.byPlatform?.tiktok || 0})</option>
+              <option value="facebook">Messenger ({stats.byPlatform?.facebook || 0})</option>
+              <option value="gmail">Gmail ({stats.byPlatform?.gmail || 0})</option>
+              <option value="website">Formulir Web ({stats.byPlatform?.website || 0})</option>
+            </select>
+            <ChevronDown className="w-3 h-3 text-zinc-400 absolute right-2.5 pointer-events-none" />
+          </div>
+
+          {/* 2. Akun Filter Dropdown Pill (Multi-Account Scoping) */}
+          <div className="relative inline-flex items-center">
+            <User className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 pointer-events-none" />
+            <select
+              value={selectedConnectionId}
+              onChange={(e) => setSelectedConnectionId(e.target.value)}
+              className={`appearance-none pl-8 pr-7 py-1.5 text-xs rounded-lg border cursor-pointer shadow-2xs transition-colors focus:outline-none focus:ring-1 focus:ring-zinc-900 max-w-[240px] truncate ${
+                selectedConnectionId !== "all"
+                  ? "border-zinc-900 bg-zinc-50 text-zinc-900 font-semibold"
+                  : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 font-medium"
+              }`}
+              title="Saring prospek berdasarkan akun media sosial penerima"
+            >
+              <option value="all">
+                Semua Akun ({stats.unfilteredTotalLeads ?? stats.totalLeads})
+              </option>
+              {availableConnections.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {(c.platform || "").toUpperCase()}: {c.accountHandle || c.accountLabel || "Akun Terhubung"}
+                  {c.leadCount !== undefined ? ` (${c.leadCount})` : ""}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="w-3 h-3 text-zinc-400 absolute right-2.5 pointer-events-none" />
+          </div>
+
+          {/* 3. Status Pipeline CRM Dropdown Pill */}
+          <div className="relative inline-flex items-center">
+            <Tag className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 pointer-events-none" />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className={`appearance-none pl-8 pr-7 py-1.5 text-xs rounded-lg border cursor-pointer shadow-2xs transition-colors focus:outline-none focus:ring-1 focus:ring-zinc-900 ${
+                statusFilter !== "all"
+                  ? "border-zinc-900 bg-zinc-50 text-zinc-900 font-semibold"
+                  : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 font-medium"
+              }`}
+              title="Saring prospek berdasarkan tahapan komunikasi atau pipeline CRM"
+            >
+              <option value="all">Semua Status ({stats.totalLeads})</option>
+              <option value="uncontacted">⏳ Belum Dihubungi ({uncontactedCount})</option>
+              <option value="contacted">💬 Sudah Dihubungi ({contactedCount})</option>
+              <option value="QUALIFIED">🟣 Terkualifikasi ({stats.byStatus?.QUALIFIED || 0})</option>
+              <option value="NEGOTIATION">🟠 Negosiasi ({stats.byStatus?.NEGOTIATION || 0})</option>
+              <option value="CONVERTED">🟢 Closing / Deal ({stats.byStatus?.CONVERTED || 0})</option>
+              <option value="LOST">⚪ Lost / Spam ({(stats.byStatus?.LOST || 0) + (stats.byStatus?.SPAM || 0)})</option>
+            </select>
+            <ChevronDown className="w-3 h-3 text-zinc-400 absolute right-2.5 pointer-events-none" />
+          </div>
+
+          {/* 4. Quick Filter: Prioritas Follow-up Jatuh Tempo (Hanya muncul jika ada prospek jatuh tempo) */}
+          {Boolean((stats.followUpDueToday || 0) > 0) && (
+            <button
+              type="button"
+              onClick={() => setFilterDueToday((prev) => !prev)}
+              className={`px-2.5 py-1.5 rounded-lg text-xs border flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs ${
+                filterDueToday
+                  ? "bg-amber-500 border-amber-600 text-white font-semibold"
+                  : "bg-white border-amber-200 text-amber-700 hover:bg-amber-50 font-medium"
+              }`}
+              title="Tampilkan hanya prospek yang jadwal follow-up jatuh tempo hari ini"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Jatuh Tempo</span>
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                  filterDueToday
+                    ? "bg-white/20 text-white"
+                    : "bg-amber-100 text-amber-800"
+                }`}
+              >
+                {stats.followUpDueToday}
+              </span>
+            </button>
+          )}
+
+          {/* 5. Quick Filter: Prospek Belum Dihubungi > 1 Jam (SLA Kritis) */}
+          {Boolean((criticalUncontactedCount || 0) > 0) && (
+            <button
+              type="button"
+              onClick={() => setFilterSlaCritical((prev) => !prev)}
+              className={`px-2.5 py-1.5 rounded-lg text-xs border flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs ${
+                filterSlaCritical
+                  ? "bg-rose-600 border-rose-700 text-white font-semibold"
+                  : "bg-white border-rose-200 text-rose-700 hover:bg-rose-50 font-medium"
+              }`}
+              title="Tampilkan hanya prospek baru yang belum dihubungi lebih dari 1 jam (SLA Kritis)"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
+              <span>SLA Kritis</span>
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                  filterSlaCritical
+                    ? "bg-white/20 text-white"
+                    : "bg-rose-100 text-rose-800"
+                }`}
+              >
+                {criticalUncontactedCount}
+              </span>
+            </button>
+          )}
+
+          {/* 6. Reset All Filters Button */}
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedPlatform("all");
+                setSelectedConnectionId("all");
+                setStatusFilter("all");
+                setFilterDueToday(false);
+                setFilterSlaCritical(false);
+                setSearchQuery("");
+              }}
+              className="px-2 py-1.5 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors flex items-center gap-1 cursor-pointer"
+              title="Hapus semua filter dan kembalikan ke tampilan default"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reset</span>
+            </button>
+          )}
         </div>
 
-        {/* Search Bar with Silent Background Indicator */}
-        <div className="relative min-w-[200px] sm:min-w-[260px] shrink-0 h-9">
+        {/* Right Section: Compact High-Performance Search Input */}
+        <div className="relative flex-1 sm:flex-initial min-w-[200px] sm:min-w-[260px] max-w-sm">
           {isSearching ? (
             <RefreshCw className="w-3.5 h-3.5 text-blue-500 animate-spin absolute left-3 top-1/2 -translate-y-1/2" />
           ) : (
@@ -1769,13 +2185,13 @@ export default function LeadsPage() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Cari nama, handle, atau pesan..."
-            className="w-full h-9 pl-9 pr-8 text-xs rounded-lg border border-zinc-200 bg-zinc-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 transition-colors shadow-2xs"
+            className="w-full h-8 pl-8 pr-7 text-xs rounded-lg border border-zinc-200 bg-zinc-50/50 hover:bg-zinc-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 transition-colors shadow-2xs text-zinc-800 placeholder-zinc-400"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={() => setSearchQuery("")}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer p-0.5"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 cursor-pointer p-0.5"
               title="Hapus pencarian"
             >
               <X className="w-3 h-3" />
@@ -1783,8 +2199,76 @@ export default function LeadsPage() {
           )}
         </div>
       </div>
+
+      {/* Active Filter Helper Strip (Menampilkan informasi transparansi filter aktif) */}
+      {hasActiveFilters && (
+        <div className="px-3 sm:px-4 py-2 bg-zinc-50/90 border-t border-zinc-200/80 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="font-semibold text-zinc-700">Filter Aktif:</span>
+            {selectedConnectionId !== "all" && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-200/90 text-zinc-900 font-medium text-[11px]">
+                Akun: {activeConnLabel}
+              </span>
+            )}
+            {selectedPlatform !== "all" && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-200/90 text-zinc-900 font-medium text-[11px]">
+                Saluran: {selectedPlatform.toUpperCase()}
+              </span>
+            )}
+            {statusFilter !== "all" && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-200/90 text-zinc-900 font-medium text-[11px]">
+                Status:{" "}
+                {statusFilter === "uncontacted"
+                  ? "Belum Dihubungi"
+                  : statusFilter === "contacted"
+                  ? "Sudah Dihubungi"
+                  : statusFilter}
+              </span>
+            )}
+            {filterSlaCritical && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 font-semibold text-[11px]">
+                SLA Kritis (&gt; 1 jam)
+              </span>
+            )}
+            {filterDueToday && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 font-semibold text-[11px]">
+                Follow-up Hari Ini
+              </span>
+            )}
+            {searchQuery && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-200/90 text-zinc-900 font-medium text-[11px]">
+                Pencarian: &ldquo;{searchQuery}&rdquo;
+              </span>
+            )}
+            <span className="text-zinc-500 text-[11px] ml-1">
+              — Menampilkan <strong className="text-zinc-800">{filteredLeads.length}</strong> dari{" "}
+              <strong className="text-zinc-800">
+                {stats.unfilteredTotalLeads ?? stats.totalLeads}
+              </strong>{" "}
+              total prospek
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setSelectedPlatform("all");
+              setSelectedConnectionId("all");
+              setStatusFilter("all");
+              setFilterDueToday(false);
+              setFilterSlaCritical(false);
+              setSearchQuery("");
+            }}
+            className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 cursor-pointer ml-auto"
+            title="Kembalikan semua filter ke tampilan penuh"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Tampilkan Semua Prospek</span>
+          </button>
+        </div>
+      )}
     </div>
-  );
+    );
+  };
 
   // Reusable Empty State Box
   const renderEmptyState = () => (
@@ -2076,26 +2560,25 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {/* Adaptive Architecture: Kanban Fluid vs Table Unified Card */}
-      {viewMode === "kanban" ? (
-        /* ================= KANBAN MODE: STANDALONE TOOLBAR + FLUID CANVAS ================= */
-        <div className="space-y-4">
-          <div className="bg-white rounded-xl border border-zinc-200 shadow-sm">
-            {renderToolbar()}
-          </div>
+      {/* Unified Enterprise Workspace Card (Kanban & Table) */}
+      <div className="bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden">
+        {/* Card Header: Unified Toolbar (Identik & Seamless untuk Kanban dan Tabel) */}
+        <div className="border-b border-zinc-200">
+          {renderToolbar()}
+        </div>
 
-          {loading ? (
-            <div className="p-16 text-center text-zinc-500 space-y-2 bg-white rounded-xl border border-zinc-200">
-              <RefreshCw className="w-5 h-5 animate-spin mx-auto text-zinc-400" />
-              <p className="text-xs font-medium">Memuat data prospek masuk...</p>
-            </div>
-          ) : filteredLeads.length === 0 ? (
-            <div className="bg-white rounded-xl border border-zinc-200 shadow-sm">
-              {renderEmptyState()}
-            </div>
-          ) : (
-            /* Modern Fluid Kanban Board */
-            <div className="flex gap-4 overflow-x-auto pb-6 pt-1 px-1 items-start min-h-[720px] scrollbar-thin">
+        {/* Card Body: Loading / Empty / Kanban / Table */}
+        {loading ? (
+          <div className="p-16 text-center text-zinc-500 space-y-2">
+            <RefreshCw className="w-5 h-5 animate-spin mx-auto text-zinc-400" />
+            <p className="text-xs font-medium">Memuat data prospek masuk...</p>
+          </div>
+        ) : filteredLeads.length === 0 ? (
+          renderEmptyState()
+        ) : viewMode === "kanban" ? (
+          /* ================= KANBAN MODE: UNIFIED FRAMED CANVAS ================= */
+          <div className="bg-zinc-100/40 p-4 sm:p-5 overflow-x-auto scrollbar-thin min-h-[720px]">
+            <div className="flex gap-4 items-start min-w-max pb-2">
           {KANBAN_STAGES.map((col) => {
             const colLeads = filteredLeads.filter(
               (l) => l.status === col.status,
@@ -2199,6 +2682,9 @@ export default function LeadsPage() {
                         lead.senderHandle ||
                         lead.senderName ||
                         lead.externalSenderId;
+                      const slaMeta = getLeadSlaMeta(lead);
+                      const hotLead = isHotLead(lead);
+                      const lostReason = lead.metadata?.lostReason;
 
                       return (
                         <div
@@ -2244,7 +2730,7 @@ export default function LeadsPage() {
                               </div>
 
                               <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
                                   {profileUrl ? (
                                     <a
                                       href={profileUrl}
@@ -2268,6 +2754,15 @@ export default function LeadsPage() {
                                       {primaryHandle}
                                     </span>
                                   )}
+                                  {hotLead && (
+                                    <span
+                                      className="px-1.5 py-0.2 rounded text-[9.5px] font-bold bg-orange-100 text-orange-800 border border-orange-200 inline-flex items-center gap-0.5 shadow-2xs shrink-0"
+                                      title="Prospek berpotensi transaksi tinggi (Hot Lead)"
+                                    >
+                                      <Flame className="w-2.5 h-2.5 text-orange-600" />
+                                      <span>Hot</span>
+                                    </span>
+                                  )}
                                   {lead.unread && (
                                     <span
                                       onClick={(e) => {
@@ -2279,6 +2774,29 @@ export default function LeadsPage() {
                                     />
                                   )}
                                 </div>
+                                {slaMeta && (
+                                  <div className="mt-0.5">
+                                    <span
+                                      className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] border ${slaMeta.badgeClass}`}
+                                      title={slaMeta.fullText}
+                                    >
+                                      <span
+                                        className={`w-1.5 h-1.5 rounded-full ${slaMeta.dotClass} ${slaMeta.isCritical ? "animate-ping" : ""}`}
+                                      />
+                                      <span>{slaMeta.label}</span>
+                                    </span>
+                                  </div>
+                                )}
+                                {lead.recipientHandle && (
+                                  <div className="flex items-center gap-1 mt-0.5">
+                                    <span
+                                      className="inline-flex items-center gap-0.5 text-[9px] text-zinc-500 bg-zinc-100 px-1.5 py-0.2 rounded border border-zinc-200/60 font-mono truncate max-w-[130px]"
+                                      title={`Diterima via akun: ${lead.recipientHandle}${lead.recipientLabel ? ` (${lead.recipientLabel})` : ""}`}
+                                    >
+                                      <span className="text-zinc-400">ke</span> {lead.recipientHandle}
+                                    </span>
+                                  </div>
+                                )}
                               </div>
                             </div>
 
@@ -2428,6 +2946,16 @@ export default function LeadsPage() {
                                 {noteCount}
                               </span>
                             )}
+
+                            {lostReason && lead.status === "LOST" && (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-red-50 text-red-700 border border-red-200 truncate max-w-[180px]"
+                                title={`Alasan Batal / Lost: ${lostReason}`}
+                              >
+                                <X className="w-2.5 h-2.5 text-red-500 shrink-0" />
+                                <span className="truncate">{lostReason}</span>
+                              </span>
+                            )}
                           </div>
 
                           {/* Card Actions Footer */}
@@ -2482,319 +3010,332 @@ export default function LeadsPage() {
               </div>
             );
           })}
+            </div>
+          </div>
+        ) : (
+          /* ================= TABLE MODE: UNIFIED TABLE BODY + SANDWICH PAGINATION ================= */
+          <div ref={tableContainerRef} className="flex flex-col">
+            {/* Top Table Pagination Toolbar (Sandwich Header) */}
+            {totalTableItems > 0 && (
+              <LeadTablePaginationBar
+                position="top"
+                totalItems={totalTableItems}
+                startIndex={tableStartIndex}
+                endIndex={tableEndIndex}
+                limit={tableLimit}
+                setLimit={setTableLimit}
+                currentPage={validTablePage}
+                setCurrentPage={setTablePage}
+                totalPages={totalTablePages}
+                onNavigateTop={scrollToTableTop}
+              />
+            )}
+
+            <div ref={tableScrollContainerRef} className="overflow-x-auto scrollbar-thin">
+              <table className="w-full text-left border-collapse table-fixed min-w-[880px]">
+                <thead>
+                  <tr className="border-b border-zinc-200 bg-zinc-50/90 text-[11px] font-bold text-zinc-500 uppercase tracking-wider h-10 select-none">
+                    <th className="py-2.5 px-4 w-[26%] whitespace-nowrap">Saluran & Kontak</th>
+                    <th className="py-2.5 px-4 w-[32%] whitespace-nowrap">Pesan Terakhir</th>
+                    <th className="py-2.5 px-4 w-[15%] whitespace-nowrap">Status Pipeline</th>
+                    <th className="py-2.5 px-4 w-[15%] whitespace-nowrap">Deal & Follow-up</th>
+                    <th className="py-2.5 px-4 w-[12%] text-right whitespace-nowrap">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-200/70 text-xs">
+                  {paginatedTableLeads.map((lead) => {
+                    const platMeta = getPlatformMeta(lead.platform);
+                    const statusMeta = getStatusMeta(lead.status);
+                    const chatUrl = getChatLink(lead);
+                    const profileUrl = getProfileLink(lead);
+                    const slaMeta = getLeadSlaMeta(lead);
+                    const hotLead = isHotLead(lead);
+                    const lostReason = lead.metadata?.lostReason;
+
+                    return (
+                      <tr
+                        key={lead.id}
+                        className={`hover:bg-zinc-50/80 transition-colors h-14 ${
+                          lead.unread ? "bg-blue-50/20 font-medium" : ""
+                        }`}
+                      >
+                        {/* 1. Kolom Saluran & Kontak */}
+                        <td className="py-2.5 px-4 align-middle">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            {/* Platform Avatar */}
+                            <div className="relative shrink-0">
+                              <div className="p-1.5 rounded-lg border border-zinc-200 bg-white shadow-2xs">
+                                {platMeta.icon}
+                              </div>
+                              {lead.unread && (
+                                <span
+                                  className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-blue-600 ring-2 ring-white"
+                                  title="Pesan Belum Dibaca"
+                                />
+                              )}
+                            </div>
+
+                            {/* Sender Info & Badges */}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                {profileUrl ? (
+                                  <a
+                                    href={profileUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="font-mono font-semibold text-zinc-900 hover:text-blue-600 truncate inline-flex items-center gap-1 transition-colors group/link shrink"
+                                    title={`Buka Profil ${platMeta.name} (${lead.senderHandle || lead.senderName || lead.externalSenderId})`}
+                                  >
+                                    <span className="truncate">{lead.senderHandle || lead.senderName || lead.externalSenderId}</span>
+                                    <ExternalLink className="w-2.5 h-2.5 opacity-40 group-hover/link:opacity-100 shrink-0" />
+                                  </a>
+                                ) : (
+                                  <span className="font-mono font-semibold text-zinc-900 truncate shrink" title={lead.senderHandle || lead.senderName || lead.externalSenderId}>
+                                    {lead.senderHandle || lead.senderName || lead.externalSenderId}
+                                  </span>
+                                )}
+
+                                <span
+                                  className={`text-[9.5px] px-1.5 py-0.2 rounded border font-medium whitespace-nowrap shrink-0 ${platMeta.badgeClass}`}
+                                >
+                                  {platMeta.name}
+                                </span>
+
+                                {hotLead && (
+                                  <span
+                                    className="text-[9px] px-1 py-0.2 rounded font-bold bg-orange-100 text-orange-800 border border-orange-200 inline-flex items-center gap-0.5 shadow-2xs whitespace-nowrap shrink-0"
+                                    title="Prospek berpotensi transaksi tinggi (Hot Lead)"
+                                  >
+                                    <Flame className="w-2.5 h-2.5 text-orange-600" />
+                                    <span>Hot</span>
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Sub-line: Target Account, SLA, or Referral Attribution */}
+                              <div className="flex items-center gap-1.5 text-[10px] text-zinc-500 mt-0.5 min-w-0">
+                                {lead.recipientHandle && (
+                                  <span
+                                    className="font-mono text-zinc-600 truncate"
+                                    title={`Diterima via akun: ${lead.recipientHandle}${lead.recipientLabel ? ` (${lead.recipientLabel})` : ""}`}
+                                  >
+                                    ke @{lead.recipientHandle.replace(/^@/, '')}
+                                  </span>
+                                )}
+                                {lead.recipientHandle && (slaMeta || lead.sourceAttribution) && <span>•</span>}
+                                {slaMeta && (
+                                  <span
+                                    className={`px-1 py-0.2 rounded border inline-flex items-center gap-0.5 whitespace-nowrap shrink-0 text-[9px] ${slaMeta.badgeClass}`}
+                                    title={slaMeta.fullText}
+                                  >
+                                    <span className={`w-1 h-1 rounded-full ${slaMeta.dotClass} ${slaMeta.isCritical ? "animate-ping" : ""}`} />
+                                    <span>{slaMeta.label}</span>
+                                  </span>
+                                )}
+                                {slaMeta && lead.sourceAttribution && <span>•</span>}
+                                {lead.sourceAttribution && (
+                                  <span className="font-mono text-zinc-400 truncate" title={`Ref: ${lead.sourceAttribution}`}>
+                                    Ref: {lead.sourceAttribution}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* 2. Kolom Pesan Masuk & Waktu */}
+                        <td className="py-2.5 px-4 align-middle min-w-0">
+                          <div
+                            onClick={() => setSelectedLead(lead)}
+                            className="group/msg cursor-pointer text-xs space-y-0.5 min-w-0"
+                            title="Klik untuk detail percakapan"
+                          >
+                            {/* Line 1: Message Text (Single Line Truncate) */}
+                            <div className="text-zinc-800 group-hover/msg:text-indigo-600 transition-colors font-medium truncate leading-relaxed">
+                              {lead.lastMessage ? (
+                                lead.lastMessage.startsWith("Membalas Story:") ? (
+                                  <span className="text-pink-700 font-semibold">{lead.lastMessage}</span>
+                                ) : lead.lastMessage.includes("Story Telah Berakhir") ? (
+                                  <span className="text-zinc-400 italic">{lead.lastMessage}</span>
+                                ) : lead.lastMessage.includes("Reaksi Cepat Story") ? (
+                                  <span className="text-zinc-700">🔥 {lead.lastMessage}</span>
+                                ) : (
+                                  <span>
+                                    {isOutboundLeadMessage(lead) && (
+                                      <span className="font-bold text-zinc-900 mr-1">Anda:</span>
+                                    )}
+                                    <span>{lead.lastMessage}</span>
+                                  </span>
+                                )
+                              ) : (
+                                <span className="text-zinc-400 italic">Tidak ada pesan teks</span>
+                              )}
+                            </div>
+
+                            {/* Line 2: Compact Direction + Relative Elapsed Time + Hour */}
+                            <div className="flex items-center gap-1.5 text-[10.5px] font-mono text-zinc-400 truncate">
+                              {isOutboundLeadMessage(lead) ? (
+                                <span className="inline-flex items-center gap-1 text-blue-600 font-sans font-medium whitespace-nowrap shrink-0">
+                                  <ArrowUpRight className="w-2.5 h-2.5 shrink-0" />
+                                  <span>Dikirim</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-zinc-500 whitespace-nowrap shrink-0">
+                                  <Clock className="w-2.5 h-2.5 text-zinc-400 shrink-0" />
+                                  <span>Diterima</span>
+                                </span>
+                              )}
+                              <span>·</span>
+                              <span className="font-sans font-medium text-zinc-600 whitespace-nowrap shrink-0">
+                                {formatRelativeTime(lead.lastContactAt || lead.firstContactAt)}
+                              </span>
+                              <span>·</span>
+                              <span className="text-zinc-400 truncate">
+                                {formatTimeOnly(lead.lastContactAt || lead.firstContactAt) ? `${formatTimeOnly(lead.lastContactAt || lead.firstContactAt)} WIB` : formatLocalDateTime(lead.lastContactAt || lead.firstContactAt)}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* 3. Kolom Status Pipeline (Interactive Dropdown) */}
+                        <td className="py-2.5 px-4 align-middle whitespace-nowrap">
+                          <div className="relative inline-block w-[118px]">
+                            <select
+                              value={lead.status}
+                              onChange={(e) =>
+                                handleStatusChange(
+                                  lead.id,
+                                  e.target.value as LeadStatus,
+                                )
+                              }
+                              className={`text-[11px] font-semibold rounded-lg pl-2 pr-5 py-1 border cursor-pointer focus:outline-none transition-colors appearance-none w-full shadow-2xs ${statusMeta.badgeClass}`}
+                            >
+                              <option value="NEW">Baru</option>
+                              <option value="CONTACTED">Dihubungi</option>
+                              <option value="QUALIFIED">Kualifikasi</option>
+                              <option value="NEGOTIATION">Negosiasi</option>
+                              <option value="CONVERTED">Deal / Won</option>
+                              <option value="LOST">Lost / Batal</option>
+                              <option value="SPAM">Spam</option>
+                            </select>
+                            <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[9px] text-zinc-500">
+                              ▼
+                            </span>
+                          </div>
+                          {lostReason && lead.status === "LOST" && (
+                            <div
+                              className="text-[9.5px] text-zinc-500 mt-1 truncate max-w-[118px] flex items-center gap-0.5"
+                              title={`Alasan Batal / Lost: ${lostReason}`}
+                            >
+                              <X className="w-2.5 h-2.5 text-red-500 shrink-0" />
+                              <span className="truncate">{lostReason}</span>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* 4. Kolom Nilai & Follow-up */}
+                        <td className="py-2.5 px-4 align-middle whitespace-nowrap text-xs">
+                          {Number(lead.dealValue) > 0 ? (
+                            <div>
+                              <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px] shadow-2xs">
+                                Rp {Number(lead.dealValue).toLocaleString("id-ID")}
+                              </span>
+                              {lead.nextFollowUpAt && (
+                                <div className="text-[10px] text-zinc-400 mt-0.5 flex items-center gap-1 font-mono">
+                                  <Calendar className="w-2.5 h-2.5" />
+                                  <span>{new Date(lead.nextFollowUpAt).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}</span>
+                                </div>
+                              )}
+                            </div>
+                          ) : lead.nextFollowUpAt ? (
+                            (() => {
+                              const fDate = new Date(lead.nextFollowUpAt);
+                              const now = new Date();
+                              const isOverdue = fDate < now;
+                              const isToday = fDate.toDateString() === now.toDateString();
+                              return (
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-medium shadow-2xs ${
+                                    isOverdue
+                                      ? "bg-red-50 text-red-700 border-red-200 font-semibold"
+                                      : isToday
+                                        ? "bg-amber-50 text-amber-700 border-amber-200 font-semibold"
+                                        : "bg-zinc-100 text-zinc-600 border-zinc-200"
+                                  }`}
+                                >
+                                  <Clock className="w-3 h-3" />
+                                  {isOverdue ? "Lewat: " : isToday ? "Hari ini " : ""}
+                                  {fDate.toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
+                                </span>
+                              );
+                            })()
+                          ) : (
+                            <span className="text-zinc-300 text-xs">-</span>
+                          )}
+                        </td>
+
+                        {/* 5. Kolom Aksi */}
+                        <td className="py-2.5 px-4 align-middle text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* Quick Chat Link */}
+                            <a
+                              href={chatUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={() => handleOpenChat(lead)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-zinc-900 hover:bg-zinc-800 text-white transition-colors shadow-2xs cursor-pointer"
+                              title={`Buka Chat di ${platMeta.name}`}
+                            >
+                              <span>Chat</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+
+                            {/* Detail View */}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedLead(lead)}
+                              className="px-2.5 py-1 rounded-md border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-700 text-xs font-medium transition-colors shadow-2xs cursor-pointer"
+                              title="Buka Detail Prospek"
+                            >
+                              Detail
+                            </button>
+
+                            {/* Delete Lead */}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteLead(lead.id)}
+                              className="p-1 rounded-md text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                              title="Hapus Lead"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+          {/* Bottom Table Pagination Footer (Sandwich Footer) */}
+          {totalTableItems > 0 && (
+            <LeadTablePaginationBar
+              position="bottom"
+              totalItems={totalTableItems}
+              startIndex={tableStartIndex}
+              endIndex={tableEndIndex}
+              limit={tableLimit}
+              setLimit={setTableLimit}
+              currentPage={validTablePage}
+              setCurrentPage={setTablePage}
+              totalPages={totalTablePages}
+              onNavigateTop={scrollToTableTop}
+            />
+          )}
         </div>
       )}
     </div>
-  ) : (
-    /* ================= TABLE MODE: UNIFIED SINGLE CARD (TOOLBAR HEADER + TABLE BODY) ================= */
-    <div className="bg-white rounded-xl border border-zinc-200 shadow-sm overflow-hidden">
-      {/* Card Header: Unified Toolbar */}
-      <div className="border-b border-zinc-200">
-        {renderToolbar()}
-      </div>
-
-      {/* Card Body: Loading / Empty / Table */}
-      {loading ? (
-        <div className="p-16 text-center text-zinc-500 space-y-2">
-          <RefreshCw className="w-5 h-5 animate-spin mx-auto text-zinc-400" />
-          <p className="text-xs font-medium">Memuat data prospek masuk...</p>
-        </div>
-      ) : filteredLeads.length === 0 ? (
-        renderEmptyState()
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-zinc-200 bg-zinc-50/70 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
-                <th className="py-3 px-4">Saluran & Kontak</th>
-                <th className="py-3 px-4">Pesan Terakhir</th>
-                <th className="py-3 px-4">Nilai Deal</th>
-                <th className="py-3 px-4">Jadwal Follow-up</th>
-                <th className="py-3 px-4">Status Pipeline</th>
-                <th className="py-3 px-4">Waktu Kontak</th>
-                <th className="py-3 px-4 text-right">Aksi</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-200/70 text-xs">
-                {filteredLeads.map((lead) => {
-                  const platMeta = getPlatformMeta(lead.platform);
-                  const statusMeta = getStatusMeta(lead.status);
-                  const chatUrl = getChatLink(lead);
-                  const profileUrl = getProfileLink(lead);
-
-                  return (
-                    <tr
-                      key={lead.id}
-                      className={`hover:bg-zinc-50/80 transition-colors ${
-                        lead.unread ? "bg-blue-50/20 font-medium" : ""
-                      }`}
-                    >
-                      {/* Kolom Saluran & Kontak */}
-                      <td className="py-3 px-4">
-                        <div className="flex items-start gap-2.5">
-                          <div className="mt-0.5 relative flex-shrink-0">
-                            <div className="p-1.5 rounded-lg border border-zinc-200 bg-white shadow-xs">
-                              {platMeta.icon}
-                            </div>
-                            {lead.unread && (
-                              <span
-                                className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-blue-600 ring-2 ring-white"
-                                title="Pesan Belum Dibaca"
-                              />
-                            )}
-                          </div>
-                          <div>
-                            <div className="font-semibold text-zinc-900 flex items-center gap-1.5">
-                              {profileUrl ? (
-                                <a
-                                  href={profileUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="hover:text-blue-600 font-mono inline-flex items-center gap-1 transition-colors group/link"
-                                  title={`Buka Profil ${platMeta.name} (${lead.senderHandle || lead.senderName || lead.externalSenderId})`}
-                                >
-                                  <span>
-                                    {lead.senderHandle ||
-                                      lead.senderName ||
-                                      lead.externalSenderId}
-                                  </span>
-                                  <ExternalLink className="w-2.5 h-2.5 opacity-40 group-hover/link:opacity-100" />
-                                </a>
-                              ) : (
-                                <span>
-                                  {lead.senderHandle ||
-                                    lead.senderName ||
-                                    lead.externalSenderId}
-                                </span>
-                              )}
-                              <span
-                                className={`text-[10px] px-1.5 py-0.2 rounded border font-medium ${platMeta.badgeClass}`}
-                              >
-                                {platMeta.name}
-                              </span>
-                            </div>
-                            {lead.sourceAttribution && (
-                              <div className="text-[10px] text-zinc-400 mt-0.5">
-                                Ref: {lead.sourceAttribution}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Kolom Pesan Terakhir */}
-                      <td className="py-3 px-4 max-w-xs md:max-w-md">
-                        <div
-                          onClick={() => setSelectedLead(lead)}
-                          className="text-zinc-700 hover:text-zinc-900 cursor-pointer text-xs space-y-1"
-                          title="Klik untuk detail percakapan"
-                        >
-                          <div className="line-clamp-2">
-                            {lead.lastMessage ? (
-                              lead.lastMessage.startsWith("Membalas Story:") ? (
-                                <span className="font-medium text-pink-700">
-                                  {lead.lastMessage}
-                                </span>
-                              ) : lead.lastMessage.includes(
-                                  "Story Telah Berakhir",
-                                ) ? (
-                                <span className="text-zinc-400 italic">
-                                  {lead.lastMessage}
-                                </span>
-                              ) : lead.lastMessage.includes(
-                                  "Reaksi Cepat Story",
-                                ) ? (
-                                <span className="text-zinc-600">
-                                  🔥 {lead.lastMessage}
-                                </span>
-                              ) : (
-                                <span>
-                                  {isOutboundLeadMessage(lead) && (
-                                    <span className="font-semibold text-zinc-900 mr-1">
-                                      Anda:
-                                    </span>
-                                  )}
-                                  <span>{lead.lastMessage}</span>
-                                  <span className="text-zinc-400 font-normal ml-1.5 text-[11px]">
-                                    ·{" "}
-                                    {formatRelativeTime(
-                                      lead.lastContactAt || lead.firstContactAt,
-                                    )}
-                                  </span>
-                                </span>
-                              )
-                            ) : (
-                              <span className="text-zinc-400 italic">
-                                Tidak ada pesan teks
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[10px] flex items-center gap-1.5 font-mono">
-                            {isOutboundLeadMessage(lead) ? (
-                              <span className="inline-flex items-center gap-1 text-blue-600 font-sans font-medium">
-                                <ArrowUpRight className="w-2.5 h-2.5 shrink-0" />
-                                <span>Dikirim</span>
-                                <span className="text-zinc-400 font-normal font-mono">
-                                  · Menunggu respon (
-                                  {formatRelativeTime(
-                                    lead.lastContactAt || lead.firstContactAt,
-                                  )}
-                                  )
-                                </span>
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-zinc-400">
-                                <Clock className="w-2.5 h-2.5 text-zinc-400" />
-                                <span>
-                                  Diterima{" "}
-                                  {formatRelativeTime(
-                                    lead.lastContactAt || lead.firstContactAt,
-                                  )}
-                                </span>
-                              </span>
-                            )}
-                            {formatTimeOnly(
-                              lead.lastContactAt || lead.firstContactAt,
-                            ) && (
-                              <span className="text-zinc-400">
-                                (
-                                {formatTimeOnly(
-                                  lead.lastContactAt || lead.firstContactAt,
-                                )}
-                                )
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Kolom Nilai Deal */}
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        {Number(lead.dealValue) > 0 ? (
-                          <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px]">
-                            Rp {Number(lead.dealValue).toLocaleString("id-ID")}
-                          </span>
-                        ) : (
-                          <span className="text-zinc-400 text-[11px]">-</span>
-                        )}
-                      </td>
-
-                      {/* Kolom Jadwal Follow-up */}
-                      <td className="py-3 px-4 whitespace-nowrap text-[11px]">
-                        {lead.nextFollowUpAt ? (
-                          (() => {
-                            const fDate = new Date(lead.nextFollowUpAt);
-                            const now = new Date();
-                            const isOverdue = fDate < now;
-                            const isToday =
-                              fDate.toDateString() === now.toDateString();
-                            return (
-                              <span
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] ${
-                                  isOverdue
-                                    ? "bg-red-50 text-red-700 border-red-200 font-semibold"
-                                    : isToday
-                                      ? "bg-amber-50 text-amber-700 border-amber-200 font-semibold"
-                                      : "bg-zinc-100 text-zinc-600 border-zinc-200"
-                                }`}
-                              >
-                                <Clock className="w-3 h-3" />
-                                {isOverdue
-                                  ? "Lewat: "
-                                  : isToday
-                                    ? "Hari ini "
-                                    : ""}
-                                {fDate.toLocaleDateString("id-ID", {
-                                  day: "numeric",
-                                  month: "short",
-                                })}
-                              </span>
-                            );
-                          })()
-                        ) : (
-                          <span className="text-zinc-400">-</span>
-                        )}
-                      </td>
-
-                      {/* Kolom Status Pipeline (Interactive Dropdown) */}
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="relative inline-block">
-                          <select
-                            value={lead.status}
-                            onChange={(e) =>
-                              handleStatusChange(
-                                lead.id,
-                                e.target.value as LeadStatus,
-                              )
-                            }
-                            className={`text-[11px] font-semibold rounded-lg px-2.5 py-1 border cursor-pointer focus:outline-none transition-colors appearance-none pr-6 ${statusMeta.badgeClass}`}
-                          >
-                            <option value="NEW">Baru</option>
-                            <option value="CONTACTED">Dihubungi</option>
-                            <option value="QUALIFIED">Kualifikasi</option>
-                            <option value="NEGOTIATION">Negosiasi</option>
-                            <option value="CONVERTED">Deal / Won</option>
-                            <option value="LOST">Lost / Batal</option>
-                            <option value="SPAM">Spam</option>
-                          </select>
-                          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-zinc-500">
-                            ▼
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Kolom Waktu Kontak */}
-                      <td className="py-3 px-4 whitespace-nowrap text-zinc-500 text-[11px]">
-                        <div className="flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-zinc-400" />
-                          <span>{formatLocalDateTime(lead.lastContactAt)}</span>
-                        </div>
-                      </td>
-
-                      {/* Kolom Aksi */}
-                      <td className="py-3 px-4 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* Quick Chat Link */}
-                          <a
-                            href={chatUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={() => handleOpenChat(lead)}
-                            className="p-1.5 rounded-lg border border-zinc-900 bg-zinc-900 hover:bg-zinc-800 text-white transition-colors cursor-pointer shadow-2xs"
-                            title={`Buka Chat di ${platMeta.name}`}
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </a>
-
-                          {/* Detail View */}
-                          <button
-                            type="button"
-                            onClick={() => setSelectedLead(lead)}
-                            className="px-2.5 py-1 rounded-lg border border-zinc-200 bg-white hover:bg-zinc-100 text-zinc-700 text-[11px] font-medium transition-colors"
-                          >
-                            Detail
-                          </button>
-
-                          {/* Delete Lead */}
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteLead(lead.id)}
-                            className="p-1.5 rounded-lg text-zinc-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                            title="Hapus Lead"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    )}
 
       {/* Detail Modal & CRM Sales Activity Timeline */}
       {selectedLead && (
@@ -2807,13 +3348,46 @@ export default function LeadsPage() {
                   {getPlatformMeta(selectedLead.platform).icon}
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-zinc-900">
-                    {selectedLead.senderHandle ||
-                      selectedLead.senderName ||
-                      selectedLead.externalSenderId}
-                  </h3>
-                  <div className="flex items-center gap-1.5 text-xs text-zinc-500 mt-0.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <h3 className="text-sm font-bold text-zinc-900">
+                      {selectedLead.senderHandle ||
+                        selectedLead.senderName ||
+                        selectedLead.externalSenderId}
+                    </h3>
+                    {isHotLead(selectedLead) && (
+                      <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-orange-100 text-orange-800 border border-orange-200 inline-flex items-center gap-0.5 shadow-2xs">
+                        <Flame className="w-2.5 h-2.5 text-orange-600" />
+                        <span>Hot Lead</span>
+                      </span>
+                    )}
+                    {getLeadSlaMeta(selectedLead) && (
+                      <span
+                        className={`px-1.5 py-0.2 rounded text-[10px] border inline-flex items-center gap-1 ${
+                          getLeadSlaMeta(selectedLead)!.badgeClass
+                        }`}
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            getLeadSlaMeta(selectedLead)!.dotClass
+                          }`}
+                        />
+                        <span>{getLeadSlaMeta(selectedLead)!.fullText}</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs text-zinc-500 mt-0.5 flex-wrap">
                     <span>{getPlatformMeta(selectedLead.platform).name}</span>
+                    {selectedLead.recipientHandle && (
+                      <>
+                        <span>•</span>
+                        <span
+                          className="font-mono text-zinc-600 bg-zinc-100 px-1.5 py-0.5 rounded text-[10px] border border-zinc-200/60"
+                          title={`Diterima di akun: ${selectedLead.recipientHandle}${selectedLead.recipientLabel ? ` (${selectedLead.recipientLabel})` : ""}`}
+                        >
+                          Akun Penerima: {selectedLead.recipientHandle}
+                        </span>
+                      </>
+                    )}
                     {getProfileLink(selectedLead) && (
                       <>
                         <span>•</span>
@@ -2830,6 +3404,15 @@ export default function LeadsPage() {
                       </>
                     )}
                   </div>
+                  {selectedLead.status === "LOST" &&
+                    selectedLead.metadata?.lostReason && (
+                      <div className="mt-1.5 flex items-center gap-1.5 text-xs text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md font-medium">
+                        <X className="w-3.5 h-3.5 shrink-0 text-red-500" />
+                        <span>
+                          Alasan Batal: {selectedLead.metadata.lostReason}
+                        </span>
+                      </div>
+                    )}
                 </div>
               </div>
               <button
@@ -3185,6 +3768,26 @@ export default function LeadsPage() {
                   >
                     {selectedLead.unread ? "● Belum Dibaca" : "✓ Sudah Dibaca"}
                   </button>
+
+                  {/* Native Read Status Synchronization Indicator */}
+                  <div className="mt-1.5 text-[10px] flex items-center gap-1">
+                    {selectedLead.metadata?.nativeReadSynced || selectedLead.metadata?.unreadCount === 0 ? (
+                      <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200/80">
+                        <Smartphone className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                        <span className="truncate">Tersinkron: Terbaca di HP</span>
+                      </span>
+                    ) : typeof selectedLead.metadata?.unreadCount === "number" && selectedLead.metadata.unreadCount > 0 ? (
+                      <span className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/80">
+                        <Smartphone className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                        <span className="truncate">Belum dibuka di HP ({selectedLead.metadata.unreadCount})</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-zinc-500 bg-zinc-50 px-1.5 py-0.5 rounded border border-zinc-200/60">
+                        <Smartphone className="w-2.5 h-2.5 text-zinc-400 shrink-0" />
+                        <span className="truncate">Sinkron dua arah via Meta/WA</span>
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -3487,11 +4090,12 @@ export default function LeadsPage() {
                   Pilih Saluran Komunikasi{" "}
                   <span className="text-red-500">*</span>
                 </label>
-                <div className="grid grid-cols-5 gap-1.5">
+                <div className="grid grid-cols-6 gap-1.5">
                   {(
                     [
                       "whatsapp",
                       "instagram",
+                      "tiktok",
                       "facebook",
                       "gmail",
                       "website",
@@ -3533,11 +4137,13 @@ export default function LeadsPage() {
                   placeholder={
                     addPlatform === "whatsapp"
                       ? "6281234567890"
-                      : addPlatform === "gmail"
-                        ? "client@company.com"
-                        : addPlatform === "website"
-                          ? "Formulir Kontak Web / Email Prospek"
-                          : "@username"
+                      : addPlatform === "tiktok"
+                        ? "@username TikTok / Nomor HP Iklan"
+                        : addPlatform === "gmail"
+                          ? "client@company.com"
+                          : addPlatform === "website"
+                            ? "Formulir Kontak Web / Email Prospek"
+                            : "@username"
                   }
                   className="w-full px-3 py-2 rounded-lg border border-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-900 text-xs"
                 />
@@ -3677,6 +4283,110 @@ export default function LeadsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Lost Reason Confirmation Modal */}
+      {pendingLostLead && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-950/40 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white w-full max-w-md rounded-2xl border border-zinc-200 shadow-xl overflow-hidden p-5 space-y-4">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-red-50 text-red-600 border border-red-100 flex items-center justify-center shrink-0">
+                  <X className="w-5 h-5 text-red-600" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-zinc-900">
+                    Tandai Prospek Batal / Lost
+                  </h3>
+                  <p className="text-xs text-zinc-500 font-mono">
+                    {pendingLostLead.senderHandle ||
+                      pendingLostLead.senderName ||
+                      pendingLostLead.externalSenderId}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingLostLead(null)}
+                className="p-1 rounded-lg text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body: Reason Selection Chips */}
+            <div className="space-y-3">
+              <label className="text-xs font-semibold text-zinc-700 block">
+                Pilih alasan utama prospek ini batal:
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {PRESET_LOST_REASONS.map((reason) => {
+                  const isSel = selectedLostReason === reason;
+                  return (
+                    <button
+                      key={reason}
+                      type="button"
+                      onClick={() => setSelectedLostReason(reason)}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer text-left ${
+                        isSel
+                          ? "bg-zinc-900 border-zinc-900 text-white font-semibold shadow-2xs"
+                          : "bg-zinc-50 border-zinc-200 text-zinc-700 hover:bg-zinc-100"
+                      }`}
+                    >
+                      {reason}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Custom Note Input */}
+              <div>
+                <label className="text-[11px] font-medium text-zinc-500 block mb-1">
+                  Catatan evaluasi tambahan (opsional):
+                </label>
+                <input
+                  type="text"
+                  value={customLostReason}
+                  onChange={(e) => setCustomLostReason(e.target.value)}
+                  placeholder="Contoh: Mengharapkan diskon 40%, budget tidak mencukupi"
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-zinc-200 bg-white focus:outline-none focus:ring-1 focus:ring-zinc-900 shadow-2xs"
+                />
+              </div>
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100">
+              <button
+                type="button"
+                onClick={() => setPendingLostLead(null)}
+                className="px-3.5 py-1.5 rounded-lg border border-zinc-200 text-zinc-700 hover:bg-zinc-50 text-xs font-medium transition-colors cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!pendingLostLead) return;
+                  setIsSubmittingLost(true);
+                  const finalReason = customLostReason.trim()
+                    ? `${selectedLostReason} - ${customLostReason.trim()}`
+                    : selectedLostReason;
+                  await handleStatusChange(
+                    pendingLostLead.id,
+                    "LOST",
+                    finalReason,
+                  );
+                  setIsSubmittingLost(false);
+                }}
+                disabled={isSubmittingLost || !selectedLostReason}
+                className="px-4 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-2xs transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                {isSubmittingLost ? "Menyimpan..." : "Konfirmasi Batal"}
+              </button>
+            </div>
           </div>
         </div>
       )}

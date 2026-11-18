@@ -4,10 +4,12 @@ import { sign, verify } from 'hono/jwt';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { composioRouter } from './modules/composio/routes';
 import { webhookRouter } from './modules/webhooks/routes';
+import { mediaRouter } from './modules/media/routes';
 import { handleSocialMediaSync } from './jobs/socialSyncJob';
 
 export type Bindings = {
   DB: D1Database;
+  MEDIA_BUCKET?: R2Bucket;
   JWT_SECRET?: string;
   COMPOSIO_API_KEY?: string;
   META_WEBHOOK_VERIFY_TOKEN?: string;
@@ -283,6 +285,11 @@ app.route('/api/composio', composioRouter);
 // Omni-Channel Real-Time Webhook Engine (Meta, WhatsApp, Forms)
 // -------------------------------------------------------------
 app.route('/api/webhooks', webhookRouter);
+
+// -------------------------------------------------------------
+// Cloudflare R2 Permanent Media & Thumbnails Storage Engine
+// -------------------------------------------------------------
+app.route('/api/media', mediaRouter);
 
 // -------------------------------------------------------------
 // GET /tracker.js (Edge-Served Universal Tracker Script)
