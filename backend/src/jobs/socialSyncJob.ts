@@ -745,7 +745,8 @@ export async function syncSocialPostsForConnection(
             if (res && res.data && Array.isArray(res.data.data) && res.data.data.length > 0) {
               rawItems.push(...res.data.data);
               const afterCursor = res.data.paging?.cursors?.after;
-              if (afterCursor && res.data.data.length >= 25 && afterCursor !== nextCursor) {
+              // Lanjut ke cursor berikutnya hanya jika cursor valid, berbeda, dan data halaman sebelumnya mencapai batas limit
+              if (afterCursor && res.data.data.length >= PAGE_LIMIT && afterCursor !== nextCursor) {
                 nextCursor = afterCursor;
               } else {
                 nextCursor = null;
@@ -755,14 +756,24 @@ export async function syncSocialPostsForConnection(
             }
           } while (nextCursor && pageCount < MAX_PAGES);
 
-          if (rawItems.length > 0) {
+          // Deduplikasi in-memory: pastikan tiap postingan unik diproses tepat 1 kali
+          // untuk mencegah race condition upload thumbnail dan duplikasi komputasi
+          const uniqueRawMap = new Map<string, any>();
+          for (const item of rawItems) {
+            if (item && item.id && !uniqueRawMap.has(String(item.id))) {
+              uniqueRawMap.set(String(item.id), item);
+            }
+          }
+          const uniqueRawItems = Array.from(uniqueRawMap.values());
+
+          if (uniqueRawItems.length > 0) {
             realPosts = [];
-            const INSIGHT_LIMIT = Math.min(rawItems.length, force ? 10 : 30);
+            const INSIGHT_LIMIT = Math.min(uniqueRawItems.length, force ? 10 : 30);
 
             // Optimasi batch: Proses insight media secara paralel terkontrol (5 per batch)
             // agar puluhan postingan selesai dalam waktu < 6 detik tanpa risiko timeout Cloudflare
-            for (let i = 0; i < rawItems.length; i += 5) {
-              const chunk = rawItems.slice(i, i + 5);
+            for (let i = 0; i < uniqueRawItems.length; i += 5) {
+              const chunk = uniqueRawItems.slice(i, i + 5);
               const processedChunk = await Promise.all(
                 chunk.map(async (item: any, cIdx: number) => {
                   const idx = i + cIdx;
@@ -993,8 +1004,14 @@ export async function syncSocialPostsForConnection(
       }
     }
 
-    // Untuk akun aktif riil, gunakan HANYA postingan riil dari API
-    const postsToInsert = realPosts;
+    // Deduplikasi defensif: pastikan setiap platform_post_id hanya diproses satu kali
+    const uniquePostsMap = new Map<string, any>();
+    for (const post of realPosts) {
+      if (post && post.platform_post_id && !uniquePostsMap.has(post.platform_post_id)) {
+        uniquePostsMap.set(post.platform_post_id, post);
+      }
+    }
+    const postsToInsert = Array.from(uniquePostsMap.values());
 
     if (postsToInsert.length === 0) {
       console.log(`[Social Posts Sync] No new posts returned from API for connection ${conn.id} (${platform}). Retaining existing posts to prevent data loss.`);
@@ -1019,8 +1036,12 @@ export async function syncSocialPostsForConnection(
         if (finalComments === 0 && Number(prev.comments_count || 0) > 0) finalComments = Number(prev.comments_count);
         if (finalShares === 0 && Number(prev.shares_count || 0) > 0) finalShares = Number(prev.shares_count);
 
-        // Universal Baseline State Retention: Cegah data media kosong/null menimpa data valid sebelumnya
-        if ((!finalThumbnailUrl || !finalThumbnailUrl.trim()) && prev.thumbnail_url) {
+        // Smart Incremental Media Retention:
+        // Jika thumbnail pada database sudah berstatus permanen R2 (/api/media/), gunakan URL permanen tersebut!
+        // Hindari menimpanya dengan URL CDN sementara dari Meta API yang akan memicu re-mirroring redundant.
+        if (prev.thumbnail_url && prev.thumbnail_url.startsWith('/api/media/')) {
+          finalThumbnailUrl = prev.thumbnail_url;
+        } else if ((!finalThumbnailUrl || !finalThumbnailUrl.trim()) && prev.thumbnail_url) {
           finalThumbnailUrl = prev.thumbnail_url;
         }
         if ((!finalPermalink || !finalPermalink.trim()) && prev.permalink) {

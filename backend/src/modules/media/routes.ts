@@ -75,9 +75,10 @@ mediaRouter.get('/thumbnails/*', async (c) => {
                 });
 
                 // Update kolom thumbnail_url di database agar menunjuk ke R2 permanen
+                const publicThumbnailPath = `/api/media/thumbnails/${platform}_${platformPostId}.jpg`;
                 await c.env.DB.prepare(
                   `UPDATE social_posts SET thumbnail_url = ? WHERE platform_post_id = ? OR id = ?;`
-                ).bind(`/api/media/thumbnails/${key}`, platformPostId, platformPostId).run();
+                ).bind(publicThumbnailPath, platformPostId, platformPostId).run();
 
                 object = await c.env.MEDIA_BUCKET.get(key);
               }

@@ -566,6 +566,44 @@ function formatRelativeTime(dateStr: string | null | undefined): string {
   return d.toLocaleDateString("id-ID", { day: "numeric", month: "short" });
 }
 
+function isLeadInPeriod(
+  dateStr: string | null | undefined,
+  period: string,
+  customStart?: string,
+  customEnd?: string
+): boolean {
+  if (!period || period === "all") return true;
+  if (!dateStr) return false;
+  const target = new Date(dateStr).getTime();
+  if (isNaN(target)) return true;
+  const now = new Date();
+
+  if (period === "24h") {
+    return target >= now.getTime() - 24 * 60 * 60 * 1000;
+  }
+  if (period === "7d") {
+    return target >= now.getTime() - 7 * 24 * 60 * 60 * 1000;
+  }
+  if (period === "30d") {
+    return target >= now.getTime() - 30 * 24 * 60 * 60 * 1000;
+  }
+  if (period === "this_month") {
+    const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).getTime();
+    return target >= startOfMonth;
+  }
+  if (period === "last_month") {
+    const startOfLastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).getTime();
+    const endOfLastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0, 23, 59, 59, 999)).getTime();
+    return target >= startOfLastMonth && target <= endOfLastMonth;
+  }
+  if (period === "custom") {
+    const start = customStart ? new Date(`${customStart}T00:00:00Z`).getTime() : 0;
+    const end = customEnd ? new Date(`${customEnd}T23:59:59Z`).getTime() : Infinity;
+    return target >= start && target <= end;
+  }
+  return true;
+}
+
 function getNoteCount(notesJson: string | null | undefined): number {
   if (!notesJson) return 0;
   try {
@@ -1054,6 +1092,12 @@ export default function LeadsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedLead, setSelectedLead] = useState<InboundLead | null>(null);
 
+  // Filter Rentang Waktu (Multi-Period Filter)
+  const [periodFilter, setPeriodFilter] = useState<string>("all");
+  const [customStartDate, setCustomStartDate] = useState<string>("");
+  const [customEndDate, setCustomEndDate] = useState<string>("");
+  const lastSyncTimeRef = useRef<number>(0);
+
   // View Switcher (Kanban vs Table) & Follow-up Filter
   const [viewMode, setViewMode] = useState<"kanban" | "table">("kanban");
   const [filterDueToday, setFilterDueToday] = useState(false);
@@ -1062,8 +1106,16 @@ export default function LeadsPage() {
   const [tablePage, setTablePage] = useState(1);
   const [tableLimit, setTableLimit] = useState(10);
 
+  // Bulk Multi-Select State (Pilar D)
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+
   // Filter Cepat SLA Kritis (> 1 Jam Belum Dihubungi)
   const [filterSlaCritical, setFilterSlaCritical] = useState(false);
+
+  // Filter Cockpit Cepat dari Kartu KPI Atas
+  const [filterNewToday, setFilterNewToday] = useState(false);
+  const [filterQualifiedOnly, setFilterQualifiedOnly] = useState(false);
 
   // Lost Reason Modal State
   const [pendingLostLead, setPendingLostLead] = useState<InboundLead | null>(null);
@@ -1194,6 +1246,11 @@ export default function LeadsPage() {
         if (selectedConnectionId && selectedConnectionId !== "all")
           params.set("connectionId", selectedConnectionId);
         if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
+        if (periodFilter && periodFilter !== "all") params.set("period", periodFilter);
+        if (periodFilter === "custom") {
+          if (customStartDate) params.set("startDate", customStartDate);
+          if (customEndDate) params.set("endDate", customEndDate);
+        }
 
         const res = await fetch(`/api/composio/leads?${params.toString()}`, {
           credentials: "include",
@@ -1216,7 +1273,15 @@ export default function LeadsPage() {
         setIsSearching(false);
       }
     },
-    [currentProject?.id, selectedPlatform, selectedConnectionId, debouncedSearch],
+    [
+      currentProject?.id,
+      selectedPlatform,
+      selectedConnectionId,
+      debouncedSearch,
+      periodFilter,
+      customStartDate,
+      customEndDate,
+    ],
   );
 
   useEffect(() => {
@@ -1227,6 +1292,15 @@ export default function LeadsPage() {
 
   // Sync Multi-Channel Leads via Composio
   const handleSyncLeads = async () => {
+    // Cooldown Debounce 15 detik untuk mencegah spam upstream API
+    const now = Date.now();
+    if (now - lastSyncTimeRef.current < 15000) {
+      const waitSec = Math.ceil((15000 - (now - lastSyncTimeRef.current)) / 1000);
+      showNotification("error", `Harap tunggu ${waitSec} detik sebelum menyinkronkan ulang prospek.`);
+      return;
+    }
+    lastSyncTimeRef.current = now;
+
     try {
       setIsSyncing(true);
       const res = await fetch("/api/composio/leads/sync", {
@@ -1805,6 +1879,34 @@ export default function LeadsPage() {
       });
     }
 
+    // Filter Cockpit: Prospek Baru Hari Ini (24 Jam Terakhir)
+    if (filterNewToday) {
+      const todayStr = new Date().toISOString().split("T")[0];
+      result = result.filter((l) => {
+        const d = l.lastContactAt || l.firstContactAt || l.createdAt;
+        return d && d.startsWith(todayStr);
+      });
+    }
+
+    // Filter Cockpit: Tingkat Kualifikasi (Qualified, Negotiation, Converted)
+    if (filterQualifiedOnly) {
+      result = result.filter((l) =>
+        ["QUALIFIED", "NEGOTIATION", "CONVERTED"].includes(l.status),
+      );
+    }
+
+    // Filter Rentang Waktu (Instant In-Memory Slicing)
+    if (periodFilter !== "all") {
+      result = result.filter((l) =>
+        isLeadInPeriod(
+          l.lastContactAt || l.firstContactAt || l.createdAt,
+          periodFilter,
+          customStartDate,
+          customEndDate,
+        ),
+      );
+    }
+
     // Filter Pencarian Klien Instan (Respons 60fps seketika tanpa loading yang mengganggu)
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
@@ -1825,15 +1927,41 @@ export default function LeadsPage() {
     }
 
     return result;
-  }, [leads, filterDueToday, filterSlaCritical, searchQuery, statusFilter, selectedConnectionId]);
+  }, [
+    leads,
+    filterDueToday,
+    filterSlaCritical,
+    filterNewToday,
+    filterQualifiedOnly,
+    searchQuery,
+    statusFilter,
+    selectedConnectionId,
+    periodFilter,
+    customStartDate,
+    customEndDate,
+  ]);
 
-  // Auto-reset halaman tabel ke 1 setiap kali filter atau pencarian diubah
+  // Auto-reset halaman tabel ke 1 dan reset seleksi setiap kali filter atau pencarian diubah
   useEffect(() => {
     setTablePage(1);
+    setSelectedLeadIds(new Set());
     if (tableScrollContainerRef.current) {
       tableScrollContainerRef.current.scrollLeft = 0;
     }
-  }, [selectedPlatform, selectedConnectionId, statusFilter, filterDueToday, filterSlaCritical, searchQuery, viewMode]);
+  }, [
+    selectedPlatform,
+    selectedConnectionId,
+    statusFilter,
+    filterDueToday,
+    filterSlaCritical,
+    filterNewToday,
+    filterQualifiedOnly,
+    searchQuery,
+    viewMode,
+    periodFilter,
+    customStartDate,
+    customEndDate,
+  ]);
 
   // Pastikan posisi scroll horizontal tabel selalu di paling kiri saat berganti halaman tabel
   useEffect(() => {
@@ -1879,6 +2007,125 @@ export default function LeadsPage() {
     } catch {
       return String(notesStr);
     }
+  };
+
+  // Bulk Multi-Select Helpers (Pilar D)
+  const toggleLeadSelection = (leadId: string) => {
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(leadId)) {
+        next.delete(leadId);
+      } else {
+        next.add(leadId);
+      }
+      return next;
+    });
+  };
+
+  const isAllCurrentPageSelected =
+    paginatedTableLeads.length > 0 &&
+    paginatedTableLeads.every((l) => selectedLeadIds.has(l.id));
+
+  const isSomeCurrentPageSelected =
+    paginatedTableLeads.some((l) => selectedLeadIds.has(l.id));
+
+  const toggleSelectAllCurrentPage = () => {
+    if (isAllCurrentPageSelected) {
+      setSelectedLeadIds((prev) => {
+        const next = new Set(prev);
+        paginatedTableLeads.forEach((l) => next.delete(l.id));
+        return next;
+      });
+    } else {
+      setSelectedLeadIds((prev) => {
+        const next = new Set(prev);
+        paginatedTableLeads.forEach((l) => next.add(l.id));
+        return next;
+      });
+    }
+  };
+
+  const handleBulkStatusUpdate = async (newStatus: string) => {
+    if (selectedLeadIds.size === 0) return;
+    try {
+      setIsBulkUpdating(true);
+      const res = await fetch("/api/composio/leads/bulk-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          leadIds: Array.from(selectedLeadIds),
+          status: newStatus,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        showNotification(
+          "success",
+          `${selectedLeadIds.size} prospek berhasil diperbarui ke status ${newStatus}`
+        );
+        setSelectedLeadIds(new Set());
+        await fetchLeads();
+      } else {
+        showNotification("error", data.error || "Gagal memperbarui status secara massal");
+      }
+    } catch (err: any) {
+      showNotification("error", err.message || "Terjadi gangguan koneksi");
+    } finally {
+      setIsBulkUpdating(false);
+    }
+  };
+
+  const handleBulkExportCsv = () => {
+    if (selectedLeadIds.size === 0) return;
+    const targetData = leads.filter((l) => selectedLeadIds.has(l.id));
+    if (targetData.length === 0) return;
+
+    const headers = [
+      "ID",
+      "Platform",
+      "Sender Name",
+      "Contact/Handle",
+      "Akun Penerima (Handle)",
+      "Last Message",
+      "Status Pipeline",
+      "Nilai Deal (IDR)",
+      "Jadwal Follow-up",
+      "Attribution",
+      "Catatan Tim",
+      "First Contact",
+      "Last Contact",
+    ];
+    const rows = targetData.map((l) => [
+      `"${l.id}"`,
+      `"${l.platform}"`,
+      `"${(l.senderName || "").replace(/"/g, '""')}"`,
+      `"${(l.senderHandle || l.externalSenderId || "").replace(/"/g, '""')}"`,
+      `"${(l.recipientHandle || l.recipientLabel || "-").replace(/"/g, '""')}"`,
+      `"${(l.lastMessage || "").replace(/"/g, '""').replace(/\r?\n/g, " ")}"`,
+      `"${l.status}"`,
+      `"${l.dealValue ? Number(l.dealValue) : 0}"`,
+      `"${l.nextFollowUpAt || "-"}"`,
+      `"${(l.sourceAttribution || "").replace(/"/g, '""')}"`,
+      `"${formatNotesForCsv(l.notes).replace(/"/g, '""').replace(/\r?\n/g, " ")}"`,
+      `"${l.firstContactAt || "-"}"`,
+      `"${l.lastContactAt || "-"}"`,
+    ]);
+
+    const csvContent =
+      "data:text/csv;charset=utf-8," +
+      [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute(
+      "download",
+      `crm-leads-selected-${new Date().toISOString().slice(0, 10)}.csv`
+    );
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showNotification("success", `${targetData.length} prospek terpilih berhasil diekspor`);
   };
 
   // Export to CSV with full CRM fields (Nilai Deal, Follow-up, Notes, Akun Penerima)
@@ -1975,16 +2222,48 @@ export default function LeadsPage() {
     return leads.filter((l) => isHotLead(l)).length;
   }, [leads]);
 
-  // Option A: Modular SaaS Filter Bar (Single Consolidated Responsive Row)
-  const renderToolbar = () => {
-    const hasActiveFilters =
+  // Deteksi status filter aktif di tingkat halaman untuk sinkronisasi Cockpit KPI dan Toolbar
+  const hasActiveFilters = useMemo(() => {
+    return (
       selectedPlatform !== "all" ||
       selectedConnectionId !== "all" ||
       statusFilter !== "all" ||
       filterDueToday ||
       filterSlaCritical ||
-      Boolean(searchQuery.trim());
+      filterNewToday ||
+      filterQualifiedOnly ||
+      periodFilter !== "all" ||
+      Boolean(searchQuery.trim())
+    );
+  }, [
+    selectedPlatform,
+    selectedConnectionId,
+    statusFilter,
+    filterDueToday,
+    filterSlaCritical,
+    filterNewToday,
+    filterQualifiedOnly,
+    periodFilter,
+    searchQuery,
+  ]);
 
+  // Handler Reset Seluruh Filter ke Tampilan Awal
+  const handleResetAllFilters = useCallback(() => {
+    setSelectedPlatform("all");
+    setSelectedConnectionId("all");
+    setStatusFilter("all");
+    setPeriodFilter("all");
+    setCustomStartDate("");
+    setCustomEndDate("");
+    setFilterDueToday(false);
+    setFilterSlaCritical(false);
+    setFilterNewToday(false);
+    setFilterQualifiedOnly(false);
+    setSearchQuery("");
+  }, []);
+
+  // Option A: Modular SaaS Filter Bar (Single Consolidated Responsive Row)
+  const renderToolbar = () => {
     const activeConn = connections.find((c) => c.id === selectedConnectionId);
     const activeConnLabel =
       activeConn?.accountHandle || activeConn?.accountLabel || "Akun Terpilih";
@@ -2100,7 +2379,31 @@ export default function LeadsPage() {
             <ChevronDown className="w-3 h-3 text-zinc-400 absolute right-2.5 pointer-events-none" />
           </div>
 
-          {/* 4. Quick Filter: Prioritas Follow-up Jatuh Tempo (Hanya muncul jika ada prospek jatuh tempo) */}
+          {/* 4. Filter Rentang Waktu (Multi-Period Dropdown Pill) */}
+          <div className="relative inline-flex items-center">
+            <Calendar className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 pointer-events-none" />
+            <select
+              value={periodFilter}
+              onChange={(e) => setPeriodFilter(e.target.value)}
+              className={`appearance-none pl-8 pr-7 py-1.5 text-xs rounded-lg border cursor-pointer shadow-2xs transition-colors focus:outline-none focus:ring-1 focus:ring-zinc-900 ${
+                periodFilter !== "all"
+                  ? "border-zinc-900 bg-zinc-50 text-zinc-900 font-semibold"
+                  : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:border-zinc-300 font-medium"
+              }`}
+              title="Saring prospek berdasarkan rentang waktu komunikasi"
+            >
+              <option value="all">Semua Waktu</option>
+              <option value="24h">24 Jam Terakhir</option>
+              <option value="7d">7 Hari Terakhir</option>
+              <option value="30d">30 Hari Terakhir</option>
+              <option value="this_month">Bulan Ini</option>
+              <option value="last_month">Bulan Lalu</option>
+              <option value="custom">Kustom Rentang...</option>
+            </select>
+            <ChevronDown className="w-3 h-3 text-zinc-400 absolute right-2.5 pointer-events-none" />
+          </div>
+
+          {/* 5. Quick Filter: Prioritas Follow-up Jatuh Tempo (Hanya muncul jika ada prospek jatuh tempo) */}
           {Boolean((stats.followUpDueToday || 0) > 0) && (
             <button
               type="button"
@@ -2156,14 +2459,7 @@ export default function LeadsPage() {
           {hasActiveFilters && (
             <button
               type="button"
-              onClick={() => {
-                setSelectedPlatform("all");
-                setSelectedConnectionId("all");
-                setStatusFilter("all");
-                setFilterDueToday(false);
-                setFilterSlaCritical(false);
-                setSearchQuery("");
-              }}
+              onClick={handleResetAllFilters}
               className="px-2 py-1.5 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-900 hover:bg-zinc-100 transition-colors flex items-center gap-1 cursor-pointer"
               title="Hapus semua filter dan kembalikan ke tampilan default"
             >
@@ -2200,11 +2496,63 @@ export default function LeadsPage() {
         </div>
       </div>
 
+      {/* Strip Rentang Tanggal Kustom */}
+      {periodFilter === "custom" && (
+        <div className="flex flex-wrap items-center gap-3 px-3 sm:px-4 py-2.5 bg-zinc-50 border-t border-zinc-200 text-xs">
+          <span className="font-semibold text-zinc-700 flex items-center gap-1.5">
+            <Calendar className="w-3.5 h-3.5 text-zinc-500" />
+            Rentang Waktu Kustom:
+          </span>
+          <div className="flex items-center gap-1.5">
+            <label className="text-zinc-500 text-[11px]">Dari:</label>
+            <input
+              type="date"
+              value={customStartDate}
+              onChange={(e) => setCustomStartDate(e.target.value)}
+              className="px-2.5 py-1 text-xs bg-white border border-zinc-200 rounded-md focus:outline-none focus:ring-1 focus:ring-zinc-900"
+            />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <label className="text-zinc-500 text-[11px]">Sampai:</label>
+            <input
+              type="date"
+              value={customEndDate}
+              onChange={(e) => setCustomEndDate(e.target.value)}
+              className="px-2.5 py-1 text-xs bg-white border border-zinc-200 rounded-md focus:outline-none focus:ring-1 focus:ring-zinc-900"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => fetchLeads(false)}
+            className="px-3 py-1 bg-zinc-900 hover:bg-zinc-800 text-white font-medium rounded-md text-xs transition-colors cursor-pointer"
+          >
+            Terapkan
+          </button>
+        </div>
+      )}
+
       {/* Active Filter Helper Strip (Menampilkan informasi transparansi filter aktif) */}
       {hasActiveFilters && (
         <div className="px-3 sm:px-4 py-2 bg-zinc-50/90 border-t border-zinc-200/80 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600">
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="font-semibold text-zinc-700">Filter Aktif:</span>
+            {periodFilter !== "all" && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-800 font-semibold text-[11px]">
+                <Calendar className="w-3 h-3 text-blue-600" />
+                Periode:{" "}
+                {periodFilter === "24h"
+                  ? "24 Jam"
+                  : periodFilter === "7d"
+                  ? "7 Hari"
+                  : periodFilter === "30d"
+                  ? "30 Hari"
+                  : periodFilter === "this_month"
+                  ? "Bulan Ini"
+                  : periodFilter === "last_month"
+                  ? "Bulan Lalu"
+                  : "Kustom"}
+              </span>
+            )}
             {selectedConnectionId !== "all" && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-200/90 text-zinc-900 font-medium text-[11px]">
                 Akun: {activeConnLabel}
@@ -2222,17 +2570,29 @@ export default function LeadsPage() {
                   ? "Belum Dihubungi"
                   : statusFilter === "contacted"
                   ? "Sudah Dihubungi"
+                  : statusFilter === "CONVERTED"
+                  ? "Deal / Won"
                   : statusFilter}
               </span>
             )}
-            {filterSlaCritical && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 font-semibold text-[11px]">
-                SLA Kritis (&gt; 1 jam)
+            {filterNewToday && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-semibold text-[11px]">
+                Baru Hari Ini (24 Jam)
               </span>
             )}
             {filterDueToday && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 font-semibold text-[11px]">
                 Follow-up Hari Ini
+              </span>
+            )}
+            {filterQualifiedOnly && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-100 text-purple-800 font-semibold text-[11px]">
+                Pipeline Potensial (Kualifikasi+)
+              </span>
+            )}
+            {filterSlaCritical && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 font-semibold text-[11px]">
+                SLA Kritis (&gt; 1 jam)
               </span>
             )}
             {searchQuery && (
@@ -2250,14 +2610,7 @@ export default function LeadsPage() {
           </div>
           <button
             type="button"
-            onClick={() => {
-              setSelectedPlatform("all");
-              setSelectedConnectionId("all");
-              setStatusFilter("all");
-              setFilterDueToday(false);
-              setFilterSlaCritical(false);
-              setSearchQuery("");
-            }}
+            onClick={handleResetAllFilters}
             className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 cursor-pointer ml-auto"
             title="Kembalikan semua filter ke tampilan penuh"
           >
@@ -2455,10 +2808,18 @@ export default function LeadsPage() {
         </div>
       )}
 
-      {/* KPI Highlight Summary Cards */}
+      {/* KPI Highlight Summary Cards (Interactive Cockpit: Klik kartu langsung memfilter data) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        {/* Card 1: Total Leads */}
-        <div className="p-4 rounded-xl bg-white border border-zinc-200 shadow-sm">
+        {/* Card 1: Total Leads (Click-to-Reset to All) */}
+        <div
+          onClick={handleResetAllFilters}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition-all ${
+            !hasActiveFilters
+              ? "bg-blue-50/30 border-blue-200 ring-2 ring-blue-200/70"
+              : "bg-white border-zinc-200 hover:border-blue-300 hover:shadow-xs"
+          }`}
+          title="Klik untuk tampilkan seluruh prospek tanpa filter"
+        >
           <div className="flex items-center justify-between text-zinc-500 mb-2">
             <span className="text-xs font-medium">Total Prospek Masuk</span>
             <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -2469,13 +2830,32 @@ export default function LeadsPage() {
             {stats.totalLeads.toLocaleString("id-ID")}
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
-            <span className="text-emerald-600 font-medium">Terhubung</span>
-            <span>ke seluruh saluran sosial & formulir</span>
+            <span
+              className={
+                !hasActiveFilters
+                  ? "text-blue-700 font-semibold"
+                  : "text-emerald-600 font-medium"
+              }
+            >
+              {!hasActiveFilters ? "● Semua Prospek Aktif" : "Klik untuk tampilkan semua"}
+            </span>
           </div>
         </div>
 
-        {/* Card 2: Leads Baru Hari Ini */}
-        <div className="p-4 rounded-xl bg-white border border-zinc-200 shadow-sm">
+        {/* Card 2: Leads Baru Hari Ini (Click-to-Filter New Today) */}
+        <div
+          onClick={() => {
+            setFilterNewToday((prev) => !prev);
+            setFilterQualifiedOnly(false);
+            if (statusFilter === "CONVERTED") setStatusFilter("all");
+          }}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition-all ${
+            filterNewToday
+              ? "bg-emerald-50/50 border-emerald-300 ring-2 ring-emerald-300/80"
+              : "bg-white border-zinc-200 hover:border-emerald-300 hover:shadow-xs"
+          }`}
+          title="Klik untuk menyaring prospek baru yang masuk 24 jam terakhir"
+        >
           <div className="flex items-center justify-between text-zinc-500 mb-2">
             <span className="text-xs font-medium">Leads Baru Hari Ini</span>
             <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
@@ -2487,7 +2867,9 @@ export default function LeadsPage() {
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
             <Clock className="w-3 h-3 text-zinc-400" />
-            <span>Pesan masuk 24 jam terakhir</span>
+            <span className={filterNewToday ? "text-emerald-700 font-semibold" : ""}>
+              {filterNewToday ? "● Filter 24 jam aktif" : "Klik untuk filter hari ini"}
+            </span>
           </div>
         </div>
 
@@ -2496,8 +2878,8 @@ export default function LeadsPage() {
           onClick={() => setFilterDueToday((prev) => !prev)}
           className={`p-4 rounded-xl border shadow-sm cursor-pointer transition-all ${
             filterDueToday
-              ? "bg-amber-50/60 border-amber-300 ring-2 ring-amber-200"
-              : "bg-white border-zinc-200 hover:border-amber-300"
+              ? "bg-amber-50/60 border-amber-300 ring-2 ring-amber-300/80"
+              : "bg-white border-zinc-200 hover:border-amber-300 hover:shadow-xs"
           }`}
           title="Klik untuk filter tugas follow-up hari ini"
         >
@@ -2513,14 +2895,30 @@ export default function LeadsPage() {
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-amber-700 font-medium">
             <span>
               {filterDueToday
-                ? "● Mode filter aktif"
+                ? "● Filter tugas aktif"
                 : "Klik untuk filter tugas"}
             </span>
           </div>
         </div>
 
-        {/* Card 4: Total Revenue Won */}
-        <div className="p-4 rounded-xl bg-white border border-zinc-200 shadow-sm">
+        {/* Card 4: Total Revenue Won (Click-to-Filter Converted) */}
+        <div
+          onClick={() => {
+            if (statusFilter === "CONVERTED") {
+              setStatusFilter("all");
+            } else {
+              setStatusFilter("CONVERTED");
+              setFilterNewToday(false);
+              setFilterQualifiedOnly(false);
+            }
+          }}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition-all ${
+            statusFilter === "CONVERTED"
+              ? "bg-emerald-50/60 border-emerald-300 ring-2 ring-emerald-300/80"
+              : "bg-white border-zinc-200 hover:border-emerald-300 hover:shadow-xs"
+          }`}
+          title="Klik untuk menyaring prospek berstatus Deal / Won (Closing)"
+        >
           <div className="flex items-center justify-between text-zinc-500 mb-2">
             <span className="text-xs font-medium">Pendapatan Deal Closing</span>
             <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
@@ -2534,12 +2932,26 @@ export default function LeadsPage() {
             Rp {((stats.totalRevenue || 0) / 1000000).toFixed(1)} jt
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
-            <span>Total dari status Deal / Won</span>
+            <span className={statusFilter === "CONVERTED" ? "text-emerald-700 font-semibold" : ""}>
+              {statusFilter === "CONVERTED" ? "● Filter Deal/Won aktif" : "Klik untuk saring closing"}
+            </span>
           </div>
         </div>
 
-        {/* Card 5: Qualified Rate */}
-        <div className="p-4 rounded-xl bg-white border border-zinc-200 shadow-sm">
+        {/* Card 5: Qualified Rate (Click-to-Filter Pipeline Potensial) */}
+        <div
+          onClick={() => {
+            setFilterQualifiedOnly((prev) => !prev);
+            setFilterNewToday(false);
+            if (statusFilter === "CONVERTED") setStatusFilter("all");
+          }}
+          className={`p-4 rounded-xl border shadow-sm cursor-pointer transition-all ${
+            filterQualifiedOnly
+              ? "bg-purple-50/60 border-purple-300 ring-2 ring-purple-300/80"
+              : "bg-white border-zinc-200 hover:border-purple-300 hover:shadow-xs"
+          }`}
+          title="Klik untuk menyaring prospek potensial (Kualifikasi, Negosiasi, Deal)"
+        >
           <div className="flex items-center justify-between text-zinc-500 mb-2">
             <span className="text-xs font-medium">Tingkat Kualifikasi</span>
             <div className="w-7 h-7 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
@@ -2550,11 +2962,10 @@ export default function LeadsPage() {
             {stats.qualifiedRate}
           </div>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-zinc-500">
-            <span>
-              {(stats.byStatus?.QUALIFIED || 0) +
-                (stats.byStatus?.NEGOTIATION || 0) +
-                (stats.byStatus?.CONVERTED || 0)}{" "}
-              prospek potensial
+            <span className={filterQualifiedOnly ? "text-purple-700 font-semibold" : ""}>
+              {filterQualifiedOnly
+                ? "● Filter prospek potensial aktif"
+                : `${(stats.byStatus?.QUALIFIED || 0) + (stats.byStatus?.NEGOTIATION || 0) + (stats.byStatus?.CONVERTED || 0)} prospek potensial`}
             </span>
           </div>
         </div>
@@ -3035,8 +3446,22 @@ export default function LeadsPage() {
               <table className="w-full text-left border-collapse table-fixed min-w-[880px]">
                 <thead>
                   <tr className="border-b border-zinc-200 bg-zinc-50/90 text-[11px] font-bold text-zinc-500 uppercase tracking-wider h-10 select-none">
-                    <th className="py-2.5 px-4 w-[26%] whitespace-nowrap">Saluran & Kontak</th>
-                    <th className="py-2.5 px-4 w-[32%] whitespace-nowrap">Pesan Terakhir</th>
+                    <th className="py-2.5 px-3 w-[4%] min-w-[36px] text-center whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        checked={isAllCurrentPageSelected}
+                        ref={(input) => {
+                          if (input) {
+                            input.indeterminate = !isAllCurrentPageSelected && isSomeCurrentPageSelected;
+                          }
+                        }}
+                        onChange={toggleSelectAllCurrentPage}
+                        className="w-4 h-4 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600"
+                        title={isAllCurrentPageSelected ? "Batalkan pilih semua" : "Pilih semua di halaman ini"}
+                      />
+                    </th>
+                    <th className="py-2.5 px-4 w-[24%] whitespace-nowrap">Saluran & Kontak</th>
+                    <th className="py-2.5 px-4 w-[30%] whitespace-nowrap">Pesan Terakhir</th>
                     <th className="py-2.5 px-4 w-[15%] whitespace-nowrap">Status Pipeline</th>
                     <th className="py-2.5 px-4 w-[15%] whitespace-nowrap">Deal & Follow-up</th>
                     <th className="py-2.5 px-4 w-[12%] text-right whitespace-nowrap">Aksi</th>
@@ -3055,10 +3480,23 @@ export default function LeadsPage() {
                     return (
                       <tr
                         key={lead.id}
-                        className={`hover:bg-zinc-50/80 transition-colors h-14 ${
-                          lead.unread ? "bg-blue-50/20 font-medium" : ""
+                        className={`transition-colors h-14 ${
+                          selectedLeadIds.has(lead.id)
+                            ? "bg-indigo-50/70 font-medium"
+                            : lead.unread
+                            ? "bg-blue-50/20 font-medium hover:bg-zinc-50/80"
+                            : "hover:bg-zinc-50/80"
                         }`}
                       >
+                        {/* 0. Checkbox Seleksi Prospek */}
+                        <td className="py-2.5 px-3 align-middle text-center" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedLeadIds.has(lead.id)}
+                            onChange={() => toggleLeadSelection(lead.id)}
+                            className="w-4 h-4 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer accent-indigo-600"
+                          />
+                        </td>
                         {/* 1. Kolom Saluran & Kontak */}
                         <td className="py-2.5 px-4 align-middle">
                           <div className="flex items-center gap-2.5 min-w-0">
@@ -3336,6 +3774,62 @@ export default function LeadsPage() {
         </div>
       )}
     </div>
+
+      {/* Floating Action Bar untuk Bulk Selection (Pilar D) */}
+      {selectedLeadIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-zinc-900 text-white rounded-2xl shadow-2xl border border-zinc-800 px-4 py-2.5 flex items-center gap-3 animate-in slide-in-from-bottom-5 duration-200 backdrop-blur-md">
+          <div className="flex items-center gap-2 pr-3 border-r border-zinc-700/80 text-xs font-semibold">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>{selectedLeadIds.size} Terpilih</span>
+          </div>
+
+          {/* Bulk Status Update Dropdown */}
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className="text-zinc-400 hidden sm:inline">Ubah Status:</span>
+            <select
+              onChange={(e) => {
+                if (e.target.value) {
+                  handleBulkStatusUpdate(e.target.value);
+                  e.target.value = "";
+                }
+              }}
+              disabled={isBulkUpdating}
+              className="bg-zinc-800 text-white text-xs font-medium rounded-lg px-2.5 py-1.5 border border-zinc-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer disabled:opacity-50"
+              defaultValue=""
+            >
+              <option value="" disabled>Pilih Status Pipeline ▾</option>
+              <option value="CONTACTED">Telah Dihubungi (CONTACTED)</option>
+              <option value="QUALIFIED">Kualifikasi Prospek (QUALIFIED)</option>
+              <option value="PROPOSAL">Kirim Proposal (PROPOSAL)</option>
+              <option value="NEGOTIATION">Tahap Negosiasi (NEGOTIATION)</option>
+              <option value="CONVERTED">Deal Closing (CONVERTED)</option>
+              <option value="LOST">Gagal / Dibatalkan (LOST)</option>
+              <option value="SPAM">Tandai Spam (SPAM)</option>
+            </select>
+          </div>
+
+          {/* Bulk Export CSV */}
+          <button
+            type="button"
+            onClick={handleBulkExportCsv}
+            className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-medium border border-zinc-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="Ekspor hanya prospek terpilih ke CSV"
+          >
+            <Download className="w-3.5 h-3.5 text-zinc-400" />
+            <span className="hidden sm:inline">Ekspor CSV</span>
+          </button>
+
+          {/* Deselect All Button */}
+          <button
+            type="button"
+            onClick={() => setSelectedLeadIds(new Set())}
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+            title="Batal pilih semua"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Detail Modal & CRM Sales Activity Timeline */}
       {selectedLead && (

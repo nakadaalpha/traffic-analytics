@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { sign, verify } from 'hono/jwt';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
-import { composioRouter } from './modules/composio/routes';
+import { composioRouter, parseDatePeriod } from './modules/composio/routes';
 import { webhookRouter } from './modules/webhooks/routes';
 import { mediaRouter } from './modules/media/routes';
 import { handleSocialMediaSync } from './jobs/socialSyncJob';
@@ -1071,16 +1071,45 @@ app.get('/api/track/metrics', async (c) => {
 
     await ensureAliasesTable(c.env.DB);
 
-    const { results } = await c.env.DB.prepare(
-      `SELECT m.project_id, m.element_id, m.page_path, CAST(m.total_clicks AS TEXT) as total_clicks, m.last_clicked_at,
-              a.display_name
-       FROM cta_metrics m
-       LEFT JOIN element_aliases a ON a.project_id = m.project_id AND a.element_id = m.element_id
-       WHERE m.project_id = ?
-       ORDER BY m.total_clicks DESC, m.last_clicked_at DESC 
-       LIMIT 100;`
-    )
-      .bind(projectId)
+    const period = c.req.query('period');
+    const customStart = c.req.query('startDate');
+    const customEnd = c.req.query('endDate');
+    const dateRange = parseDatePeriod(period, customStart, customEnd);
+
+    let query: string;
+    let params: any[];
+
+    if (dateRange.startIso || dateRange.endIso) {
+      query = `SELECT e.project_id, e.element_id, e.page_path, CAST(COUNT(*) AS TEXT) as total_clicks,
+                      MAX(e.created_at) as last_clicked_at, a.display_name
+               FROM click_events e
+               LEFT JOIN element_aliases a ON a.project_id = e.project_id AND a.element_id = e.element_id
+               WHERE e.project_id = ?`;
+      params = [projectId];
+      if (dateRange.startIso) {
+        query += ` AND e.created_at >= ?`;
+        params.push(dateRange.startIso);
+      }
+      if (dateRange.endIso) {
+        query += ` AND e.created_at <= ?`;
+        params.push(dateRange.endIso);
+      }
+      query += ` GROUP BY e.project_id, e.element_id, e.page_path
+                 ORDER BY COUNT(*) DESC, last_clicked_at DESC
+                 LIMIT 100;`;
+    } else {
+      query = `SELECT m.project_id, m.element_id, m.page_path, CAST(m.total_clicks AS TEXT) as total_clicks, m.last_clicked_at,
+                      a.display_name
+               FROM cta_metrics m
+               LEFT JOIN element_aliases a ON a.project_id = m.project_id AND a.element_id = m.element_id
+               WHERE m.project_id = ?
+               ORDER BY m.total_clicks DESC, m.last_clicked_at DESC 
+               LIMIT 100;`;
+      params = [projectId];
+    }
+
+    const { results } = await c.env.DB.prepare(query)
+      .bind(...params)
       .all();
 
     return c.json({ success: true, projectId, count: results.length, data: results });
@@ -1112,16 +1141,32 @@ app.get('/api/track/events', async (c) => {
     const limitParam = parseInt(c.req.query('limit') || '200', 10);
     const limit = isNaN(limitParam) ? 200 : Math.min(Math.max(limitParam, 1), 1000);
 
-    const { results } = await c.env.DB.prepare(
-      `SELECT CAST(e.id AS TEXT) as id, e.project_id, e.element_id, e.page_path, e.session_id, e.user_id, e.user_agent, e.ip_address, e.country, e.city, e.created_at,
-              a.display_name
-       FROM click_events e
-       LEFT JOIN element_aliases a ON a.project_id = e.project_id AND a.element_id = e.element_id
-       WHERE e.project_id = ?
-       ORDER BY e.created_at DESC 
-       LIMIT ?;`
-    )
-      .bind(projectId, limit)
+    const period = c.req.query('period');
+    const customStart = c.req.query('startDate');
+    const customEnd = c.req.query('endDate');
+    const dateRange = parseDatePeriod(period, customStart, customEnd);
+
+    let query = `SELECT CAST(e.id AS TEXT) as id, e.project_id, e.element_id, e.page_path, e.session_id, e.user_id, e.user_agent, e.ip_address, e.country, e.city, e.created_at,
+               a.display_name
+        FROM click_events e
+        LEFT JOIN element_aliases a ON a.project_id = e.project_id AND a.element_id = e.element_id
+        WHERE e.project_id = ?`;
+    const params: any[] = [projectId];
+
+    if (dateRange.startIso) {
+      query += ` AND e.created_at >= ?`;
+      params.push(dateRange.startIso);
+    }
+    if (dateRange.endIso) {
+      query += ` AND e.created_at <= ?`;
+      params.push(dateRange.endIso);
+    }
+
+    query += ` ORDER BY e.created_at DESC LIMIT ?;`;
+    params.push(limit);
+
+    const { results } = await c.env.DB.prepare(query)
+      .bind(...params)
       .all();
 
     return c.json({ success: true, projectId, count: results.length, data: results });

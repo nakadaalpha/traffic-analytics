@@ -18,6 +18,7 @@ import {
   Share2,
   X,
   Building2,
+  Calendar,
 } from 'lucide-react';
 import { resolveElementName, getBrandBadgeStyle } from '@/lib/elementNaming';
 import { useProject } from '@/context/ProjectContext';
@@ -236,6 +237,11 @@ export default function EventsPage() {
   const [sortColumn, setSortColumn] = useState<'time' | 'element_id'>('time');
   const [sortDirection, setSortDirection] = useState<'desc' | 'asc'>('desc');
 
+  // Filter Rentang Waktu (Multi-Period Filter)
+  const [periodFilter, setPeriodFilter] = useState<string>('all');
+  const [customStartDate, setCustomStartDate] = useState<string>('');
+  const [customEndDate, setCustomEndDate] = useState<string>('');
+
   // Fetch raw events untuk workspace aktif
   const fetchEvents = useCallback(async () => {
     if (!selectedProject) {
@@ -244,7 +250,14 @@ export default function EventsPage() {
     }
     try {
       setLoading(true);
-      const res = await fetch(`/api/track/events?projectId=${encodeURIComponent(selectedProject)}`, {
+      const params = new URLSearchParams({ projectId: selectedProject });
+      if (periodFilter && periodFilter !== 'all') params.append('period', periodFilter);
+      if (periodFilter === 'custom') {
+        if (customStartDate) params.append('startDate', customStartDate);
+        if (customEndDate) params.append('endDate', customEndDate);
+      }
+
+      const res = await fetch(`/api/track/events?${params.toString()}`, {
         credentials: 'include',
         cache: 'no-store',
       });
@@ -259,18 +272,19 @@ export default function EventsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedProject]);
+  }, [selectedProject, periodFilter, customStartDate, customEndDate]);
 
   useEffect(() => {
     if (selectedProject) {
       fetchEvents();
     }
 
+    // Smart Polling Interval: 20 detik (hemat 75% read rows, auto-refresh saat fokus)
     const interval = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         fetchEvents();
       }
-    }, 5000);
+    }, 20000);
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -428,13 +442,35 @@ export default function EventsPage() {
               </button>
             </div>
 
+            {/* Period Selector Dropdown */}
+            <div className="h-8 flex items-center gap-1.5 bg-white border border-zinc-200 rounded-lg px-2.5 shadow-xs text-xs">
+              <Calendar className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+              <select
+                value={periodFilter}
+                onChange={(e) => setPeriodFilter(e.target.value)}
+                className="bg-transparent text-xs font-semibold text-zinc-800 focus:outline-none cursor-pointer pr-1"
+                title="Filter rentang waktu log event"
+              >
+                <option value="all">Semua Waktu</option>
+                <option value="24h">24 Jam Terakhir</option>
+                <option value="7d">7 Hari Terakhir</option>
+                <option value="30d">30 Hari Terakhir</option>
+                <option value="this_month">Bulan Ini</option>
+                <option value="last_month">Bulan Lalu</option>
+                <option value="custom">Kustom Rentang...</option>
+              </select>
+            </div>
+
             {/* Reset Filter Button */}
-            {(ctaCategoryFilter !== 'all' || searchQuery) && (
+            {(ctaCategoryFilter !== 'all' || searchQuery || periodFilter !== 'all') && (
               <button
                 type="button"
                 onClick={() => {
                   setCtaCategoryFilter('all');
                   setSearchQuery('');
+                  setPeriodFilter('all');
+                  setCustomStartDate('');
+                  setCustomEndDate('');
                 }}
                 className="px-2.5 py-1 text-xs text-zinc-600 hover:text-zinc-900 bg-white border border-zinc-200 rounded-md shadow-xs flex items-center gap-1 cursor-pointer transition-colors"
               >
@@ -465,6 +501,41 @@ export default function EventsPage() {
             )}
           </div>
         </div>
+
+        {/* Strip Rentang Tanggal Kustom */}
+        {periodFilter === 'custom' && (
+          <div className="flex flex-wrap items-center gap-3 px-3 py-2 bg-zinc-50 border-b border-zinc-200 text-xs">
+            <span className="font-semibold text-zinc-700 flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-zinc-500" />
+              Rentang Waktu Kustom:
+            </span>
+            <div className="flex items-center gap-1.5">
+              <label className="text-zinc-500 text-[11px]">Dari:</label>
+              <input
+                type="date"
+                value={customStartDate}
+                onChange={(e) => setCustomStartDate(e.target.value)}
+                className="px-2.5 py-1 text-xs bg-white border border-zinc-200 rounded-md focus:outline-none focus:ring-1 focus:ring-zinc-900"
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <label className="text-zinc-500 text-[11px]">Sampai:</label>
+              <input
+                type="date"
+                value={customEndDate}
+                onChange={(e) => setCustomEndDate(e.target.value)}
+                className="px-2.5 py-1 text-xs bg-white border border-zinc-200 rounded-md focus:outline-none focus:ring-1 focus:ring-zinc-900"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={fetchEvents}
+              className="px-3 py-1 bg-zinc-900 hover:bg-zinc-800 text-white font-medium rounded-md text-xs transition-colors cursor-pointer"
+            >
+              Terapkan
+            </button>
+          </div>
+        )}
 
         {events.length === 0 ? (
           <div className="py-12 px-4 text-center space-y-2">

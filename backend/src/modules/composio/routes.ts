@@ -38,9 +38,11 @@ export function formatIsoUtc(dateStr: string | null | undefined): string | null 
 /**
  * Memeriksa apakah URL CDN Instagram bertanda tangan (&oe=...) telah kedaluwarsa.
  * Parameter 'oe' adalah timestamp unix dalam format hexadecimal (detik).
+ * Path lokal permanen R2 (/api/media/...) tidak akan pernah kedaluwarsa.
  */
 export function isInstagramUrlExpired(url: string | null | undefined): boolean {
   if (!url) return true;
+  if (url.startsWith('/api/media/')) return false;
   const match = url.match(/[?&]oe=([0-9a-fA-F]+)/);
   if (!match) return false;
   try {
@@ -50,6 +52,50 @@ export function isInstagramUrlExpired(url: string | null | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Helper untuk mengonversi kode periode ('7d', '30d', 'this_month', 'last_month', 'all', 'custom')
+ * menjadi rentang timestamp ISO 8601 (startIso & endIso).
+ */
+export function parseDatePeriod(
+  period?: string | null,
+  customStart?: string | null,
+  customEnd?: string | null
+): { startIso?: string; endIso?: string } {
+  if (customStart || customEnd) {
+    const startIso = customStart ? `${customStart}T00:00:00Z` : undefined;
+    const endIso = customEnd ? `${customEnd}T23:59:59Z` : undefined;
+    return { startIso, endIso };
+  }
+  if (!period || period === 'all') return {};
+
+  const now = new Date();
+  let start = new Date(now);
+
+  if (period === '24h' || period === 'today') {
+    start.setHours(0, 0, 0, 0);
+  } else if (period === '7d') {
+    start.setDate(now.getDate() - 7);
+  } else if (period === '30d') {
+    start.setDate(now.getDate() - 30);
+  } else if (period === '90d') {
+    start.setDate(now.getDate() - 90);
+  } else if (period === 'this_month') {
+    start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  } else if (period === 'last_month') {
+    const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+    const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+    return {
+      startIso: prevMonthStart.toISOString(),
+      endIso: prevMonthEnd.toISOString(),
+    };
+  }
+
+  return {
+    startIso: start.toISOString(),
+    endIso: now.toISOString(),
+  };
 }
 
 let socialTablesInitialized = false;
@@ -654,14 +700,30 @@ composioRouter.get('/metrics', async (c) => {
       if (match) primaryAccount = match;
     }
 
-    // 2. Ambil data metrik time-series terfokus untuk akun yang dipilih
-    const { results: historyRows } = await c.env.DB.prepare(
-      `SELECT h.connection_id, h.platform, h.metric_type, h.metric_value, h.snapshot_date, h.recorded_at
-       FROM social_metrics_history h
-       WHERE h.connection_id = ?
-       ORDER BY h.snapshot_date ASC, h.id ASC;`
-    )
-      .bind(primaryAccount.id)
+    // 2. Filter periode dan ambil data metrik time-series terfokus untuk akun yang dipilih
+    const reqPeriod = c.req.query('period');
+    const reqStartDate = c.req.query('startDate');
+    const reqEndDate = c.req.query('endDate');
+    const { startIso, endIso } = parseDatePeriod(reqPeriod, reqStartDate, reqEndDate);
+
+    let histQuery = `
+      SELECT h.connection_id, h.platform, h.metric_type, h.metric_value, h.snapshot_date, h.recorded_at
+      FROM social_metrics_history h
+      WHERE h.connection_id = ?
+    `;
+    const histParams: any[] = [primaryAccount.id];
+    if (startIso) {
+      histQuery += ` AND h.snapshot_date >= ?`;
+      histParams.push(startIso.split('T')[0]);
+    }
+    if (endIso) {
+      histQuery += ` AND h.snapshot_date <= ?`;
+      histParams.push(endIso.split('T')[0]);
+    }
+    histQuery += ` ORDER BY h.snapshot_date ASC, h.id ASC;`;
+
+    const { results: historyRows } = await c.env.DB.prepare(histQuery)
+      .bind(...histParams)
       .all<any>();
 
     // 3. Ekstrak nilai metrik terbaru
@@ -856,13 +918,18 @@ composioRouter.get('/posts', async (c) => {
     const reqProjectId = c.req.query('projectId');
     const reqConnectionId = c.req.query('connectionId');
 
-    // Pastikan setiap koneksi memiliki data postingan di tabel social_posts
+    // Sinkronisasi inisial cerdas: Hanya jalankan sinkronisasi background jika koneksi belum memiliki postingan sama sekali
     const targetConns = reqConnectionId
       ? connections.filter((conn: any) => conn.id === reqConnectionId)
       : connections;
 
     for (const conn of targetConns) {
-      await syncSocialPostsForConnection(c.env, conn, composio, false);
+      const existingCountRes: any = await c.env.DB.prepare(
+        `SELECT COUNT(*) as count FROM social_posts WHERE connection_id = ?;`
+      ).bind(conn.id).first().catch(() => null);
+      if (!existingCountRes || Number(existingCountRes.count || 0) === 0) {
+        await syncSocialPostsForConnection(c.env, conn, composio, false);
+      }
     }
 
     // Susun query pengambilan data
@@ -895,6 +962,21 @@ composioRouter.get('/posts', async (c) => {
     if (filterPlatform && filterPlatform !== 'all') {
       query += ` AND p.platform = ?`;
       params.push(filterPlatform.toLowerCase());
+    }
+
+    // Penyaringan Rentang Waktu / Periode Unggahan Konten (published_at)
+    const reqPeriod = c.req.query('period');
+    const reqStartDate = c.req.query('startDate');
+    const reqEndDate = c.req.query('endDate');
+    const { startIso, endIso } = parseDatePeriod(reqPeriod, reqStartDate, reqEndDate);
+
+    if (startIso) {
+      query += ` AND p.published_at >= ?`;
+      params.push(startIso);
+    }
+    if (endIso) {
+      query += ` AND p.published_at <= ?`;
+      params.push(endIso);
     }
 
     if (sortBy === 'views') {
@@ -1074,7 +1156,7 @@ composioRouter.post('/posts/sync', async (c) => {
               const updateStatements: any[] = [];
               for (const post of needRefresh) {
                 const node = objects[post.platform_post_id];
-                let freshUrl = node?.media_url || node?.thumbnail_url;
+                let freshUrl = node?.thumbnail_url || node?.media_url;
                 if (freshUrl) {
                   // Simpan permanen ke Cloudflare R2 jika tersedia
                   if (c.env.MEDIA_BUCKET) {
@@ -1178,7 +1260,7 @@ composioRouter.post('/posts/:postId/refresh-thumbnail', async (c) => {
       });
 
       const node = res?.data?.objects?.[post.platform_post_id];
-      freshThumbnailUrl = node?.media_url || node?.thumbnail_url || null;
+      freshThumbnailUrl = node?.thumbnail_url || node?.media_url || null;
     }
 
     if (!freshThumbnailUrl) {
@@ -1285,7 +1367,7 @@ composioRouter.post('/posts/refresh-thumbnails-batch', async (c) => {
         const objects = res?.data?.objects || {};
         for (const post of connPosts) {
           const node = objects[post.platform_post_id];
-          let freshUrl = node?.media_url || node?.thumbnail_url;
+          let freshUrl = node?.thumbnail_url || node?.media_url;
           if (freshUrl) {
             if (c.env.MEDIA_BUCKET) {
               try {
@@ -1578,6 +1660,21 @@ composioRouter.get('/insights', async (c) => {
     if (reqConnectionId) {
       query += ` AND p.connection_id = ?`;
       params.push(reqConnectionId);
+    }
+
+    // Penyaringan Rentang Waktu / Periode untuk Analisis Insight AI
+    const reqPeriod = c.req.query('period');
+    const reqStartDate = c.req.query('startDate');
+    const reqEndDate = c.req.query('endDate');
+    const { startIso, endIso } = parseDatePeriod(reqPeriod, reqStartDate, reqEndDate);
+
+    if (startIso) {
+      query += ` AND p.published_at >= ?`;
+      params.push(startIso);
+    }
+    if (endIso) {
+      query += ` AND p.published_at <= ?`;
+      params.push(endIso);
     }
 
     query += ` ORDER BY p.published_at DESC;`;
@@ -1874,6 +1971,21 @@ composioRouter.get('/attribution', async (c) => {
     await ensureSocialTables(c.env.DB);
 
     const reqProjectId = c.req.query('projectId');
+    const reqPeriod = c.req.query('period');
+    const reqStartDate = c.req.query('startDate');
+    const reqEndDate = c.req.query('endDate');
+    const { startIso, endIso } = parseDatePeriod(reqPeriod, reqStartDate, reqEndDate);
+
+    let dateClause = '';
+    const dateParams: any[] = [];
+    if (startIso) {
+      dateClause += ` AND created_at >= ?`;
+      dateParams.push(startIso);
+    }
+    if (endIso) {
+      dateClause += ` AND created_at <= ?`;
+      dateParams.push(endIso);
+    }
 
     // Dapatkan project ID milik user atau filter per project spesifik jika diminta
     let projectIds: string[] = [];
@@ -1896,15 +2008,16 @@ composioRouter.get('/attribution', async (c) => {
     const socialClicksRes: any = await c.env.DB.prepare(
       `SELECT COUNT(*) as total FROM click_events 
        WHERE project_id IN (${placeholders}) 
-         AND (social_platform IS NOT NULL OR utm_source IS NOT NULL OR referrer LIKE '%instagram.com%' OR referrer LIKE '%tiktok.com%' OR referrer LIKE '%youtube.com%' OR referrer LIKE '%facebook.com%');`
-    ).bind(...projectIds).first();
+         AND (social_platform IS NOT NULL OR utm_source IS NOT NULL OR referrer LIKE '%instagram.com%' OR referrer LIKE '%tiktok.com%' OR referrer LIKE '%youtube.com%' OR referrer LIKE '%facebook.com%')
+         ${dateClause};`
+    ).bind(...projectIds, ...dateParams).first();
 
     const totalSocialClicks = Number(socialClicksRes?.total || 0);
 
     // 2. Total Semua Klik Web (untuk menghitung rasio kontribusi sosial)
     const allClicksRes: any = await c.env.DB.prepare(
-      `SELECT COUNT(*) as total FROM click_events WHERE project_id IN (${placeholders});`
-    ).bind(...projectIds).first();
+      `SELECT COUNT(*) as total FROM click_events WHERE project_id IN (${placeholders}) ${dateClause};`
+    ).bind(...projectIds, ...dateParams).first();
     const totalWebClicks = Number(allClicksRes?.total || 0);
 
     // 3. Breakdown per Platform Media Sosial
@@ -1925,9 +2038,10 @@ composioRouter.get('/attribution', async (c) => {
        FROM click_events
        WHERE project_id IN (${placeholders})
          AND (social_platform IS NOT NULL OR utm_source IS NOT NULL OR referrer LIKE '%instagram.com%' OR referrer LIKE '%tiktok.com%' OR referrer LIKE '%youtube.com%' OR referrer LIKE '%facebook.com%')
+         ${dateClause}
        GROUP BY platform
        ORDER BY clicks DESC;`
-    ).bind(...projectIds).all<any>();
+    ).bind(...projectIds, ...dateParams).all<any>();
 
     const platformBreakdown = (breakdownRes.results || []).map((row: any) => ({
       platform: row.platform,
@@ -1948,10 +2062,11 @@ composioRouter.get('/attribution', async (c) => {
        LEFT JOIN element_aliases a ON a.project_id = c.project_id AND a.element_id = c.element_id
        WHERE c.project_id IN (${placeholders})
          AND (c.social_platform IS NOT NULL OR c.utm_source IS NOT NULL OR c.referrer LIKE '%instagram.com%' OR c.referrer LIKE '%tiktok.com%' OR c.referrer LIKE '%youtube.com%' OR c.referrer LIKE '%facebook.com%')
+         ${dateClause}
        GROUP BY c.element_id, c.page_path
        ORDER BY clicks DESC
        LIMIT 5;`
-    ).bind(...projectIds).all<any>();
+    ).bind(...projectIds, ...dateParams).all<any>();
 
     // 5. 10 Log Konversi Terakhir dari Media Sosial
     const recentConversionsRes = await c.env.DB.prepare(
@@ -1976,9 +2091,10 @@ composioRouter.get('/attribution', async (c) => {
        LEFT JOIN element_aliases a ON a.project_id = c.project_id AND a.element_id = c.element_id
        WHERE c.project_id IN (${placeholders})
          AND (c.social_platform IS NOT NULL OR c.utm_source IS NOT NULL OR c.referrer LIKE '%instagram.com%' OR c.referrer LIKE '%tiktok.com%' OR c.referrer LIKE '%youtube.com%' OR c.referrer LIKE '%facebook.com%')
+         ${dateClause}
        ORDER BY c.id DESC
        LIMIT 10;`
-    ).bind(...projectIds).all<any>();
+    ).bind(...projectIds, ...dateParams).all<any>();
 
     const conversionRate = totalWebClicks > 0 
       ? ((totalSocialClicks / totalWebClicks) * 100).toFixed(1) + '%' 
@@ -2173,9 +2289,22 @@ composioRouter.get('/leads', async (c) => {
     const status = c.req.query('status'); // 'all' or specific
     const search = c.req.query('search');
     const dueToday = c.req.query('dueToday') === 'true' || c.req.query('dueToday') === '1';
+    const period = c.req.query('period');
+    const customStart = c.req.query('startDate');
+    const customEnd = c.req.query('endDate');
+    const dateRange = parseDatePeriod(period, customStart, customEnd);
 
     let whereClauses: string[] = ['l.user_id = ?'];
     let params: any[] = [user.id];
+
+    if (dateRange.startIso) {
+      whereClauses.push('(COALESCE(l.last_contact_at, l.created_at) >= ?)');
+      params.push(dateRange.startIso);
+    }
+    if (dateRange.endIso) {
+      whereClauses.push('(COALESCE(l.last_contact_at, l.created_at) <= ?)');
+      params.push(dateRange.endIso);
+    }
 
     if (projectId) {
       whereClauses.push('(l.project_id = ? OR l.project_id IS NULL)');
@@ -2237,6 +2366,14 @@ composioRouter.get('/leads', async (c) => {
     if (projectId) {
       summaryWhere += ' AND (project_id = ? OR project_id IS NULL)';
       summaryParams.push(projectId);
+    }
+    if (dateRange.startIso) {
+      summaryWhere += ' AND (COALESCE(last_contact_at, created_at) >= ?)';
+      summaryParams.push(dateRange.startIso);
+    }
+    if (dateRange.endIso) {
+      summaryWhere += ' AND (COALESCE(last_contact_at, created_at) <= ?)';
+      summaryParams.push(dateRange.endIso);
     }
 
     // Capture unfiltered summary parameters for workspace global count
@@ -2969,6 +3106,69 @@ composioRouter.post('/leads', async (c) => {
   } catch (err: any) {
     console.error('[Add Lead Error]', err.message);
     return c.json({ success: false, error: err.message || 'Gagal menambahkan prospek' }, 500);
+  }
+});
+
+// -------------------------------------------------------------
+// POST /api/composio/leads/bulk-update
+// Atomically updates status or deal value for multiple leads via D1 batch
+// -------------------------------------------------------------
+composioRouter.post('/leads/bulk-update', async (c) => {
+  const user = await extractUser(c);
+  if (!user) {
+    return c.json({ success: false, error: 'Unauthorized: Sesi tidak ditemukan' }, 401);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const { leadIds, status, dealValue } = body;
+
+  if (!Array.isArray(leadIds) || leadIds.length === 0) {
+    return c.json({ success: false, error: 'Daftar ID prospek tidak boleh kosong' }, 400);
+  }
+
+  try {
+    await ensureSocialTables(c.env.DB);
+
+    const validStatuses = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'CONVERTED', 'LOST', 'SPAM'];
+    const updateClauses: string[] = ['updated_at = CURRENT_TIMESTAMP'];
+    const clauseParams: any[] = [];
+
+    if (status) {
+      const st = String(status).toUpperCase();
+      if (validStatuses.includes(st)) {
+        updateClauses.push('status = ?');
+        clauseParams.push(st);
+      }
+    }
+
+    if (dealValue !== undefined && !isNaN(Number(dealValue))) {
+      updateClauses.push('deal_value = ?');
+      clauseParams.push(Number(dealValue));
+    }
+
+    if (clauseParams.length === 0) {
+      return c.json({ success: false, error: 'Tidak ada data pembaruan yang valid' }, 400);
+    }
+
+    const sql = `UPDATE inbound_leads SET ${updateClauses.join(', ')} WHERE id = ? AND user_id = ?;`;
+    const batchStatements = leadIds.map((id: string) => {
+      return c.env.DB.prepare(sql).bind(...clauseParams, id, user.id);
+    });
+
+    // Cloudflare D1 batching: chunk to max 100 per call for bulletproof scalability
+    const BATCH_CHUNK_SIZE = 100;
+    for (let i = 0; i < batchStatements.length; i += BATCH_CHUNK_SIZE) {
+      const chunk = batchStatements.slice(i, i + BATCH_CHUNK_SIZE);
+      await c.env.DB.batch(chunk);
+    }
+
+    return c.json({
+      success: true,
+      message: `${leadIds.length} prospek berhasil diperbarui secara massal`,
+      updatedCount: leadIds.length,
+    });
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message || 'Gagal memperbarui prospek secara massal' }, 500);
   }
 });
 

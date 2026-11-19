@@ -22,7 +22,7 @@ export async function mirrorThumbnailToR2(
   if (!sourceUrl || !sourceUrl.trim()) return null;
 
   // Jika sudah berupa URL R2 lokal, langsung kembalikan tanpa mengunduh ulang
-  if (sourceUrl.startsWith('/api/media/thumbnails/')) {
+  if (sourceUrl.startsWith('/api/media/')) {
     return sourceUrl;
   }
 
@@ -32,13 +32,15 @@ export async function mirrorThumbnailToR2(
   }
 
   const sanitizedId = platformPostId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const key = `thumbnails/${platform}_${sanitizedId}.jpg`;
+  const filename = `${platform}_${sanitizedId}.jpg`;
+  const key = `thumbnails/${filename}`;
+  const publicPath = `/api/media/thumbnails/${filename}`;
 
   try {
     // 1. Cek apakah objek sudah pernah tersimpan di R2 (0 byte transfer)
     const existing = await env.MEDIA_BUCKET.head(key);
     if (existing) {
-      return `/api/media/thumbnails/${key}`;
+      return publicPath;
     }
 
     // 2. Unduh file biner gambar dari URL sumber dengan timeout defensif 7 detik
@@ -87,7 +89,7 @@ export async function mirrorThumbnailToR2(
     console.log(
       `[R2 Mirror] Berhasil menyimpan thumbnail permanen: ${key} (${buffer.byteLength} bytes)`
     );
-    return `/api/media/thumbnails/${key}`;
+    return publicPath;
   } catch (err: any) {
     console.warn(`[R2 Mirror Notice] Gagal mem-mirror thumbnail ${key}:`, err.message);
     return sourceUrl;

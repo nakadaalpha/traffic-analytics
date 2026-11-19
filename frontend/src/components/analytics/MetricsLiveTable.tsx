@@ -242,11 +242,12 @@ export function MetricsLiveTable({
     }
 
     if (!isControlled) {
+      // Smart Polling Interval: 20 detik (hemat 80% overhead D1 read, auto-refresh saat tab aktif)
       const interval = setInterval(() => {
         if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
           fetchMetrics();
         }
-      }, 4000);
+      }, 20000);
 
       const handleVisibilityChange = () => {
         if (document.visibilityState === 'visible') {

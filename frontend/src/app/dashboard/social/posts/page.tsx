@@ -24,7 +24,11 @@ import {
   ChevronRight,
   TrendingUp,
   Clock,
-  Layers
+  Layers,
+  Play,
+  Maximize2,
+  Film,
+  X
 } from 'lucide-react';
 import { useProject } from '@/context/ProjectContext';
 import { useAuth } from '@/context/AuthContext';
@@ -148,6 +152,61 @@ function isInstagramUrlExpired(url: string | null | undefined): boolean {
   }
 }
 
+/**
+ * Filter data postingan berdasarkan periode tanggal terbit (publishedAt)
+ * Mendukung 'all', '24h', '7d', '30d', 'this_month', 'last_month', dan 'custom'.
+ */
+function isPostInPeriod(
+  publishedAt: string | null | undefined,
+  period: string,
+  customStart?: string,
+  customEnd?: string
+): boolean {
+  if (!period || period === 'all') return true;
+  if (!publishedAt) return false;
+
+  try {
+    const postTime = new Date(publishedAt).getTime();
+    if (isNaN(postTime)) return false;
+    const now = Date.now();
+
+    if (period === '24h') {
+      return postTime >= now - 24 * 60 * 60 * 1000 && postTime <= now;
+    }
+    if (period === '7d') {
+      return postTime >= now - 7 * 24 * 60 * 60 * 1000 && postTime <= now;
+    }
+    if (period === '30d') {
+      return postTime >= now - 30 * 24 * 60 * 60 * 1000 && postTime <= now;
+    }
+    if (period === 'this_month') {
+      const nowDate = new Date();
+      const startMonth = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1, 0, 0, 0, 0).getTime();
+      return postTime >= startMonth && postTime <= now;
+    }
+    if (period === 'last_month') {
+      const nowDate = new Date();
+      const prevMonthStart = new Date(nowDate.getFullYear(), nowDate.getMonth() - 1, 1, 0, 0, 0, 0).getTime();
+      const prevMonthEnd = new Date(nowDate.getFullYear(), nowDate.getMonth(), 0, 23, 59, 59, 999).getTime();
+      return postTime >= prevMonthStart && postTime <= prevMonthEnd;
+    }
+    if (period === 'custom') {
+      if (customStart) {
+        const startTime = new Date(`${customStart}T00:00:00`).getTime();
+        if (postTime < startTime) return false;
+      }
+      if (customEnd) {
+        const endTime = new Date(`${customEnd}T23:59:59`).getTime();
+        if (postTime > endTime) return false;
+      }
+      return true;
+    }
+  } catch {
+    return true;
+  }
+  return true;
+}
+
 // -------------------------------------------------------------
 // Component: Defensive Post Thumbnail with Seamless Zero-Click Mirroring & Shimmer Placeholder
 // -------------------------------------------------------------
@@ -155,10 +214,12 @@ function PostThumbnail({
   post, 
   platformObj,
   onThumbnailUpdated,
+  onPreview,
 }: { 
   post: SocialPost; 
   platformObj: any;
   onThumbnailUpdated?: (postId: string, newUrl: string) => void;
+  onPreview?: (post: SocialPost, currentUrl: string | null) => void;
 }) {
   const [currentUrl, setCurrentUrl] = useState<string | null>(post.thumbnailUrl);
   const [hasError, setHasError] = useState(false);
@@ -258,26 +319,49 @@ function PostThumbnail({
   }
 
   return (
-    <div className="relative rounded-lg overflow-hidden bg-zinc-900 aspect-[3/4] group/thumb">
+    <div 
+      onClick={() => onPreview?.(post, currentUrl)}
+      className="relative rounded-lg overflow-hidden bg-zinc-900 aspect-[3/4] group/thumb cursor-pointer select-none"
+      title="Klik untuk menonton / pratinjau media di aplikasi"
+    >
       {currentUrl.includes('.mp4') ? (
-        <video
-          src={currentUrl}
-          className="w-full h-full object-cover"
-          muted
-          playsInline
-          preload="metadata"
-          onError={() => setHasError(true)}
-        />
+        <div className="w-full h-full bg-gradient-to-br from-zinc-900 via-zinc-800 to-zinc-950 flex flex-col items-center justify-center p-3 text-center relative overflow-hidden group/vid">
+          {/* Background Ambient Glow */}
+          <div className="absolute inset-0 bg-radial from-indigo-500/10 via-transparent to-transparent pointer-events-none" />
+          
+          <div className="w-11 h-11 rounded-full bg-white/10 border border-white/20 text-white flex items-center justify-center mb-2 shadow-lg group-hover/thumb:scale-110 group-hover/thumb:bg-indigo-600 transition-all duration-300">
+            <Play className="w-5 h-5 ml-0.5 fill-current" />
+          </div>
+          
+          <span className="text-[11px] font-medium text-zinc-300 line-clamp-2 px-1 relative z-10">
+            {post.titleOrCaption || 'Putar Pratinjau Video'}
+          </span>
+          
+          <span className="mt-1.5 text-[9px] uppercase font-bold tracking-wider text-indigo-300 bg-indigo-950/70 px-2 py-0.5 rounded-full border border-indigo-500/30">
+            Video MP4
+          </span>
+        </div>
       ) : (
         <img
           src={currentUrl}
-          alt={post.titleOrCaption}
+          alt={post.titleOrCaption ? `Thumbnail postingan: ${post.titleOrCaption.slice(0, 60)}` : `Thumbnail konten ${post.platform}`}
           className="w-full h-full object-cover transition-transform duration-300 group-hover/thumb:scale-105"
           loading="lazy"
+          decoding="async"
           onError={() => setHasError(true)}
         />
       )}
       <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none" />
+
+      {/* Hover Overlay Play Icon (for images) */}
+      {!currentUrl.includes('.mp4') && (
+        <div className="absolute inset-0 bg-black/0 group-hover/thumb:bg-black/30 transition-colors flex items-center justify-center pointer-events-none">
+          <div className="w-10 h-10 rounded-full bg-white/90 text-zinc-900 flex items-center justify-center shadow-lg opacity-0 group-hover/thumb:opacity-100 transform scale-90 group-hover/thumb:scale-100 transition-all duration-200">
+            <Play className="w-4 h-4 ml-0.5 fill-current" />
+          </div>
+        </div>
+      )}
+
       {post.additionalMetrics?.duration && (
         <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-xs text-[10px] font-mono font-semibold text-white">
           {post.additionalMetrics.duration}
@@ -345,6 +429,7 @@ function PaginationBar({
           </span>
           <select
             value={itemsPerPage}
+            aria-label="Konten per halaman"
             onChange={(e) => {
               setItemsPerPage(Number(e.target.value));
               setCurrentPage(1);
@@ -373,6 +458,7 @@ function PaginationBar({
               }
             }}
             disabled={currentPage <= 1}
+            aria-label="Halaman Sebelumnya"
             className="px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-xs font-medium flex items-center gap-1 shadow-2xs cursor-pointer"
             title="Halaman Sebelumnya"
           >
@@ -393,6 +479,7 @@ function PaginationBar({
               }
             }}
             disabled={currentPage >= totalPages}
+            aria-label="Halaman Berikutnya"
             className="px-2.5 py-1 rounded-md border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-xs font-medium flex items-center gap-1 shadow-2xs cursor-pointer"
             title="Halaman Berikutnya"
           >
@@ -442,17 +529,23 @@ export default function SocialPostsPage() {
   // Filters & Search
   const [platformFilter, setPlatformFilter] = useState<string>('all');
   const [selectedConnectionId, setSelectedConnectionId] = useState<string>('all');
+  const [periodFilter, setPeriodFilter] = useState<string>('all');
+  const [customStartDate, setCustomStartDate] = useState<string>('');
+  const [customEndDate, setCustomEndDate] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'views' | 'likes' | 'comments' | 'recent'>('recent');
+
+  // Cooldown timestamp ref untuk tombol Manual Sync
+  const lastSyncTimeRef = useRef<number>(0);
 
   // Client-Side Grid Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(24);
 
-  // Auto-reset ke Halaman 1 saat filter, pencarian, atau sorting berubah
+  // Auto-reset ke Halaman 1 saat filter, pencarian, periode, atau sorting berubah
   useEffect(() => {
     setCurrentPage(1);
-  }, [platformFilter, selectedConnectionId, searchQuery, sortBy]);
+  }, [platformFilter, selectedConnectionId, periodFilter, customStartDate, customEndDate, searchQuery, sortBy]);
 
   // Modal Komentar Masuk
   const [mounted, setMounted] = useState(false);
@@ -462,6 +555,28 @@ export default function SocialPostsPage() {
   const [commentsList, setCommentsList] = useState<PostComment[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [commentsError, setCommentsError] = useState<string | null>(null);
+
+  // Modal In-App Video & Media Preview (Pilar C)
+  const [selectedPreviewPost, setSelectedPreviewPost] = useState<{
+    post: SocialPost;
+    mediaUrl: string | null;
+  } | null>(null);
+  const [previewMediaError, setPreviewMediaError] = useState(false);
+
+  useEffect(() => {
+    setPreviewMediaError(false);
+  }, [selectedPreviewPost?.post.id]);
+
+  // Keyboard listener ESC untuk menutup modal video preview
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape' && selectedPreviewPost) {
+        setSelectedPreviewPost(null);
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedPreviewPost]);
 
   // Notifikasi
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -512,7 +627,7 @@ export default function SocialPostsPage() {
     }
   }, [currentProject?.id, getAuthHeaders]);
 
-  // 2. Fetch Posts dengan Smart Filtering
+  // 2. Fetch Posts (Single Fetch per Workspace, 0-hit saat ganti filter/periode)
   const fetchPosts = useCallback(async () => {
     try {
       setLoading(true);
@@ -521,17 +636,6 @@ export default function SocialPostsPage() {
       if (currentProject?.id) {
         params.append('projectId', currentProject.id);
       }
-
-      if (platformFilter && platformFilter !== 'all') {
-        params.append('platform', platformFilter);
-      }
-
-      // Smart Connection Filter: Hanya kirim connectionId jika bukan 'all'
-      if (selectedConnectionId && selectedConnectionId !== 'all') {
-        params.append('connectionId', selectedConnectionId);
-      }
-
-      params.append('sort', sortBy);
 
       const res = await fetch(`/api/composio/posts?${params.toString()}`, {
         headers: getAuthHeaders(),
@@ -542,6 +646,24 @@ export default function SocialPostsPage() {
         const fetchedPosts: SocialPost[] = json.posts || [];
         setPosts(fetchedPosts);
         setPostsSummary(json.summary || null);
+
+        // Ekstrak koneksi unik langsung dari daftar postingan jika belum tersedia
+        setConnections((prev) => {
+          if (prev.length > 0) return prev;
+          const map = new Map<string, SocialConnection>();
+          for (const p of fetchedPosts) {
+            if (p.connectionId && !map.has(p.connectionId)) {
+              map.set(p.connectionId, {
+                id: p.connectionId,
+                platform: p.platform,
+                accountHandle: p.accountHandle || null,
+                accountLabel: (p as any).accountLabel || null,
+                status: 'ACTIVE',
+              });
+            }
+          }
+          return Array.from(map.values());
+        });
 
         // Silent Background Batch Auto-Heal: Perbarui dan simpan gambar kedaluwarsa ke Cloudflare R2 secara otomatis
         const expiredPosts = fetchedPosts.filter(
@@ -570,7 +692,7 @@ export default function SocialPostsPage() {
     } finally {
       setLoading(false);
     }
-  }, [currentProject?.id, platformFilter, selectedConnectionId, sortBy, getAuthHeaders]);
+  }, [currentProject?.id, getAuthHeaders]);
 
   useEffect(() => {
     fetchConnections();
@@ -580,8 +702,16 @@ export default function SocialPostsPage() {
     fetchPosts();
   }, [fetchPosts]);
 
-  // 3. Handle Manual Sync Konten dengan penanganan defensif & detail error
+  // 3. Handle Manual Sync Konten dengan penanganan defensif & perlindungan cooldown 15 detik
   const handleManualSync = async () => {
+    const now = Date.now();
+    if (now - lastSyncTimeRef.current < 15000) {
+      const waitSec = Math.ceil((15000 - (now - lastSyncTimeRef.current)) / 1000);
+      showNotification('error', `Mohon tunggu ${waitSec} detik sebelum memicu sinkronisasi konten baru.`);
+      return;
+    }
+    lastSyncTimeRef.current = now;
+
     try {
       setIsSyncing(true);
       setNotification(null);
@@ -660,16 +790,80 @@ export default function SocialPostsPage() {
     }
   }, [getAuthHeaders]);
 
-  // Filtered Posts berdasarkan Search Query
+  // Filtered Posts berdasarkan Platform, Akun, Periode, Search Query, dan Sorting (Zero-Hit In-Memory Slicing)
   const filteredPosts = useMemo(() => {
-    if (!searchQuery.trim()) return posts;
-    const q = searchQuery.toLowerCase();
-    return posts.filter(
-      (p) =>
-        (p.titleOrCaption || '').toLowerCase().includes(q) ||
-        (p.accountHandle || '').toLowerCase().includes(q)
-    );
-  }, [posts, searchQuery]);
+    let result = posts;
+
+    // 1. Filter Platform
+    if (platformFilter && platformFilter !== 'all') {
+      result = result.filter((p) => p.platform?.toLowerCase() === platformFilter.toLowerCase());
+    }
+
+    // 2. Filter Akun / Koneksi
+    if (selectedConnectionId && selectedConnectionId !== 'all') {
+      result = result.filter((p) => p.connectionId === selectedConnectionId);
+    }
+
+    // 3. Filter Periode Tanggal Terbit Konten
+    if (periodFilter && periodFilter !== 'all') {
+      result = result.filter((p) => isPostInPeriod(p.publishedAt, periodFilter, customStartDate, customEndDate));
+    }
+
+    // 4. Filter Pencarian Teks
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(
+        (p) =>
+          (p.titleOrCaption || '').toLowerCase().includes(q) ||
+          (p.accountHandle || '').toLowerCase().includes(q) ||
+          (p.platform || '').toLowerCase().includes(q)
+      );
+    }
+
+    // 5. Sorting
+    if (sortBy === 'views') {
+      result = [...result].sort((a, b) => (Number(b.viewsCount) || 0) - (Number(a.viewsCount) || 0));
+    } else if (sortBy === 'likes') {
+      result = [...result].sort((a, b) => (Number(b.likesCount) || 0) - (Number(a.likesCount) || 0));
+    } else if (sortBy === 'comments') {
+      result = [...result].sort((a, b) => (Number(b.commentsCount) || 0) - (Number(a.commentsCount) || 0));
+    } else {
+      // 'recent'
+      result = [...result].sort((a, b) => new Date(b.publishedAt || 0).getTime() - new Date(a.publishedAt || 0).getTime());
+    }
+
+    return result;
+  }, [posts, platformFilter, selectedConnectionId, periodFilter, customStartDate, customEndDate, searchQuery, sortBy]);
+
+  // Dynamic Summary Recalculation (Kalkulasi instan 6 KPI Card berdasarkan subset yang terfilter)
+  const dynamicSummary = useMemo(() => {
+    const totalPosts = filteredPosts.length;
+    let totalViews = 0;
+    let totalLikes = 0;
+    let totalComments = 0;
+    let totalShares = 0;
+
+    for (const p of filteredPosts) {
+      totalViews += Number(p.viewsCount || 0);
+      totalLikes += Number(p.likesCount || 0);
+      totalComments += Number(p.commentsCount || 0);
+      totalShares += Number(p.sharesCount || 0);
+    }
+
+    const totalInteractions = totalLikes + totalComments;
+    const avgEngagementRate =
+      totalViews > 0 ? `${((totalInteractions / totalViews) * 100).toFixed(1)}%` : '0.0%';
+
+    return {
+      totalPosts,
+      totalViews,
+      totalLikes,
+      totalComments,
+      totalShares,
+      totalInteractions,
+      avgEngagementRate,
+    };
+  }, [filteredPosts]);
 
   // Client-Side Grid Pagination Calculations
   const totalItems = filteredPosts.length;
@@ -768,6 +962,7 @@ export default function SocialPostsPage() {
           <button
             type="button"
             onClick={() => setNotification(null)}
+            aria-label="Tutup notifikasi"
             className="text-xs text-zinc-400 hover:text-zinc-600 font-bold px-1 cursor-pointer"
           >
             ✕
@@ -775,7 +970,7 @@ export default function SocialPostsPage() {
         </div>
       )}
 
-      {/* KPI Cards Ringkasan Konten */}
+      {/* KPI Cards Ringkasan Konten (Reaktif Dinamis terhadap Filter & Periode) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Konten */}
         <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs space-y-1">
@@ -784,11 +979,11 @@ export default function SocialPostsPage() {
             <PlaySquare className="w-4 h-4 text-zinc-400" />
           </div>
           <div className="text-2xl font-black text-zinc-900 tracking-tight font-mono">
-            {loading ? '...' : (postsSummary?.totalPosts || filteredPosts.length).toLocaleString('id-ID')}
+            {loading ? '...' : dynamicSummary.totalPosts.toLocaleString('id-ID')}
           </div>
           <div className="text-[11px] text-zinc-500 pt-1 flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            <span>Video & postingan resmi</span>
+            <span>{periodFilter === 'all' ? 'Video & postingan resmi' : `Konten rilis ${periodFilter.replace('_', ' ')}`}</span>
           </div>
         </div>
 
@@ -799,7 +994,7 @@ export default function SocialPostsPage() {
             <Eye className="w-4 h-4 text-sky-500" />
           </div>
           <div className="text-2xl font-black text-zinc-900 tracking-tight font-mono">
-            {loading ? '...' : (postsSummary?.totalViews || 0).toLocaleString('id-ID')}
+            {loading ? '...' : dynamicSummary.totalViews.toLocaleString('id-ID')}
           </div>
           <div className="text-[11px] text-zinc-500 pt-1">
             Akumulasi pemutaran konten
@@ -813,10 +1008,10 @@ export default function SocialPostsPage() {
             <ThumbsUp className="w-4 h-4 text-rose-500" />
           </div>
           <div className="text-2xl font-black text-zinc-900 tracking-tight font-mono">
-            {loading ? '...' : ((postsSummary?.totalLikes || 0) + (postsSummary?.totalComments || 0)).toLocaleString('id-ID')}
+            {loading ? '...' : dynamicSummary.totalInteractions.toLocaleString('id-ID')}
           </div>
           <div className="text-[11px] text-zinc-500 pt-1">
-            {(postsSummary?.totalLikes || 0).toLocaleString('id-ID')} likes, {(postsSummary?.totalComments || 0).toLocaleString('id-ID')} komentar
+            {dynamicSummary.totalLikes.toLocaleString('id-ID')} likes, {dynamicSummary.totalComments.toLocaleString('id-ID')} komentar
           </div>
         </div>
 
@@ -827,7 +1022,7 @@ export default function SocialPostsPage() {
             <TrendingUp className="w-4 h-4 text-emerald-500" />
           </div>
           <div className="text-2xl font-black text-emerald-600 tracking-tight font-mono">
-            {loading ? '...' : (postsSummary?.avgEngagementRate || '0.0%')}
+            {loading ? '...' : dynamicSummary.avgEngagementRate}
           </div>
           <div className="text-[11px] text-zinc-500 pt-1">
             Rasio likes & komentar per views
@@ -872,6 +1067,7 @@ export default function SocialPostsPage() {
               <span className="text-xs text-zinc-400 font-medium whitespace-nowrap">Filter Akun:</span>
               <select
                 value={selectedConnectionId}
+                aria-label="Filter Akun Media Sosial"
                 onChange={(e) => setSelectedConnectionId(e.target.value)}
                 className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-800 focus:outline-none focus:ring-1 focus:ring-zinc-400 cursor-pointer shadow-2xs"
               >
@@ -885,38 +1081,146 @@ export default function SocialPostsPage() {
             </div>
           </div>
 
-          {/* Search Bar & Sort Dropdown */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1">
+          {/* Search Bar, Periode Filter & Sort Dropdown */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1 flex-wrap">
             {/* Search Input */}
-            <div className="relative flex-1 max-w-md">
+            <div className="relative flex-1 min-w-[200px] max-w-md">
               <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 placeholder="Cari caption, judul video, handle pengunggah..."
+                aria-label="Cari caption atau konten postingan"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full text-xs pl-8 pr-3 py-2 bg-white border border-zinc-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-400 text-zinc-800 placeholder-zinc-400 shadow-2xs"
               />
             </div>
 
-            {/* Sort Selector */}
-            <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
-              <span className="text-xs text-zinc-400 font-medium flex items-center gap-1">
-                <ArrowUpDown className="w-3.5 h-3.5" />
-                Urutkan:
-              </span>
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as any)}
-                className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-800 focus:outline-none focus:ring-1 focus:ring-zinc-400 cursor-pointer shadow-2xs"
-              >
-                <option value="recent">Tanggal Rilis Terbaru</option>
-                <option value="views">Penayangan Terbanyak (Views)</option>
-                <option value="likes">Paling Disukai (Likes)</option>
-                <option value="comments">Komentar Terbanyak (Comments)</option>
-              </select>
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Filter Periode Rilis Konten */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="text-xs text-zinc-400 font-medium flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-zinc-400" />
+                  Periode:
+                </span>
+                <select
+                  value={periodFilter}
+                  aria-label="Filter Periode Konten"
+                  onChange={(e) => setPeriodFilter(e.target.value)}
+                  className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-800 focus:outline-none focus:ring-1 focus:ring-zinc-400 cursor-pointer shadow-2xs"
+                >
+                  <option value="all">Semua Waktu</option>
+                  <option value="24h">24 Jam Terakhir</option>
+                  <option value="7d">7 Hari Terakhir</option>
+                  <option value="30d">30 Hari Terakhir</option>
+                  <option value="this_month">Bulan Ini</option>
+                  <option value="last_month">Bulan Lalu</option>
+                  <option value="custom">Rentang Kustom...</option>
+                </select>
+              </div>
+
+              {/* Sort Selector */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="text-xs text-zinc-400 font-medium flex items-center gap-1">
+                  <ArrowUpDown className="w-3.5 h-3.5" />
+                  Urutkan:
+                </span>
+                <select
+                  value={sortBy}
+                  aria-label="Urutkan Konten Postingan"
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-white text-zinc-800 focus:outline-none focus:ring-1 focus:ring-zinc-400 cursor-pointer shadow-2xs"
+                >
+                  <option value="recent">Tanggal Rilis Terbaru</option>
+                  <option value="views">Penayangan Terbanyak (Views)</option>
+                  <option value="likes">Paling Disukai (Likes)</option>
+                  <option value="comments">Komentar Terbanyak (Comments)</option>
+                </select>
+              </div>
             </div>
           </div>
+
+          {/* Sub-bar Tanggal Kustom jika periode 'custom' terpilih */}
+          {periodFilter === 'custom' && (
+            <div className="flex items-center gap-2 pt-2 border-t border-zinc-200/60 text-xs flex-wrap">
+              <span className="text-zinc-500 font-medium">Dari Tanggal:</span>
+              <input
+                type="date"
+                value={customStartDate}
+                onChange={(e) => setCustomStartDate(e.target.value)}
+                className="px-2.5 py-1 bg-white border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 focus:outline-none focus:ring-1 focus:ring-zinc-400 shadow-2xs"
+              />
+              <span className="text-zinc-500 font-medium">Sampai:</span>
+              <input
+                type="date"
+                value={customEndDate}
+                onChange={(e) => setCustomEndDate(e.target.value)}
+                className="px-2.5 py-1 bg-white border border-zinc-200 rounded-md text-xs font-medium text-zinc-800 focus:outline-none focus:ring-1 focus:ring-zinc-400 shadow-2xs"
+              />
+              {(customStartDate || customEndDate) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomStartDate('');
+                    setCustomEndDate('');
+                  }}
+                  className="px-2 py-1 text-[11px] text-zinc-500 hover:text-zinc-900 font-medium cursor-pointer underline"
+                >
+                  Reset Tanggal
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Active Filter Helper Strip */}
+          {(platformFilter !== 'all' || selectedConnectionId !== 'all' || periodFilter !== 'all' || searchQuery.trim()) && (
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-200/60 text-xs">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-zinc-400 text-[11px]">Filter aktif:</span>
+                {platformFilter !== 'all' && (
+                  <span className="px-2 py-0.5 rounded-full bg-zinc-200 text-zinc-800 text-[11px] font-medium flex items-center gap-1">
+                    Platform: <strong className="capitalize">{platformFilter}</strong>
+                    <button type="button" onClick={() => setPlatformFilter('all')} className="hover:text-red-600">✕</button>
+                  </span>
+                )}
+                {selectedConnectionId !== 'all' && (
+                  <span className="px-2 py-0.5 rounded-full bg-zinc-200 text-zinc-800 text-[11px] font-medium flex items-center gap-1">
+                    Akun spesifik
+                    <button type="button" onClick={() => setSelectedConnectionId('all')} className="hover:text-red-600">✕</button>
+                  </span>
+                )}
+                {periodFilter !== 'all' && (
+                  <span className="px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-[11px] font-medium flex items-center gap-1">
+                    Periode: <strong>{periodFilter === 'custom' ? `${customStartDate || 'Awal'} - ${customEndDate || 'Sekarang'}` : periodFilter.replace('_', ' ')}</strong>
+                    <button type="button" onClick={() => { setPeriodFilter('all'); setCustomStartDate(''); setCustomEndDate(''); }} className="hover:text-red-600">✕</button>
+                  </span>
+                )}
+                {searchQuery.trim() && (
+                  <span className="px-2 py-0.5 rounded-full bg-zinc-200 text-zinc-800 text-[11px] font-medium flex items-center gap-1">
+                    Cari: &ldquo;{searchQuery}&rdquo;
+                    <button type="button" onClick={() => setSearchQuery('')} className="hover:text-red-600">✕</button>
+                  </span>
+                )}
+                <span className="text-[11px] text-zinc-400 pl-1">
+                  ({filteredPosts.length} dari {posts.length} konten)
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setPlatformFilter('all');
+                  setSelectedConnectionId('all');
+                  setPeriodFilter('all');
+                  setCustomStartDate('');
+                  setCustomEndDate('');
+                  setSearchQuery('');
+                }}
+                className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 cursor-pointer whitespace-nowrap"
+              >
+                Reset Semua Filter
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Top Pagination Toolbar (Sandwich Header) */}
@@ -989,13 +1293,15 @@ export default function SocialPostsPage() {
                         post={post} 
                         platformObj={platformObj} 
                         onThumbnailUpdated={handleThumbnailUpdated} 
+                        onPreview={(p, url) => setSelectedPreviewPost({ post: p, mediaUrl: url })}
                       />
 
                       {/* Title / Caption */}
                       {post.titleOrCaption && (
                         <h3
-                          className="font-bold text-xs text-zinc-900 line-clamp-2 leading-snug group-hover:text-indigo-600 transition-colors"
+                          className="font-bold text-xs text-zinc-900 line-clamp-2 leading-snug group-hover:text-indigo-600 transition-colors cursor-pointer"
                           title={post.titleOrCaption}
+                          onClick={() => setSelectedPreviewPost({ post, mediaUrl: post.thumbnailUrl })}
                         >
                           {post.titleOrCaption}
                         </h3>
@@ -1026,6 +1332,7 @@ export default function SocialPostsPage() {
                         <button
                           type="button"
                           onClick={() => openCommentsModal(post)}
+                          aria-label={`Buka ${Number(post.commentsCount).toLocaleString('id-ID')} komentar postingan`}
                           className="space-y-0.5 hover:bg-zinc-100/60 rounded transition-colors cursor-pointer"
                           title="Klik untuk melihat komentar publik"
                         >
@@ -1054,10 +1361,20 @@ export default function SocialPostsPage() {
                     <div className="pt-2 border-t border-zinc-100 flex items-center justify-between text-xs">
                       <button
                         type="button"
+                        onClick={() => setSelectedPreviewPost({ post, mediaUrl: post.thumbnailUrl })}
+                        className="inline-flex items-center gap-1 text-zinc-600 hover:text-indigo-600 font-semibold cursor-pointer transition-colors"
+                        title="Tonton video atau pratinjau media di aplikasi"
+                      >
+                        <Play className="w-3 h-3 fill-current text-indigo-500" />
+                        <span>Pratinjau</span>
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => openCommentsModal(post)}
                         className="inline-flex items-center gap-1 text-zinc-500 hover:text-zinc-900 font-medium cursor-pointer transition-colors"
                       >
-                        <MessageCircle className="w-3.5 h-3.5" />
+                        <MessageCircle className="w-3.5 h-3.5 text-zinc-400" />
                         <span>Komentar ({post.commentsCount})</span>
                       </button>
 
@@ -1121,6 +1438,7 @@ export default function SocialPostsPage() {
               <button
                 type="button"
                 onClick={() => setActiveCommentsPost(null)}
+                aria-label="Tutup analisis komentar"
                 className="w-7 h-7 rounded-lg hover:bg-zinc-200/60 text-zinc-400 hover:text-zinc-700 flex items-center justify-center transition-colors cursor-pointer shrink-0"
               >
                 ✕
@@ -1212,6 +1530,194 @@ export default function SocialPostsPage() {
                   <ExternalLink className="w-3 h-3" />
                 </a>
               )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Modal In-App Video & Media Preview (Pilar C) */}
+      {mounted && selectedPreviewPost && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-zinc-950/80 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => setSelectedPreviewPost(null)}
+        >
+          <div
+            className="w-full max-w-4xl max-h-[90vh] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col md:flex-row text-white animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Sisi Kiri: Media Viewport / Native Player */}
+            <div className="flex-1 bg-black flex items-center justify-center relative min-h-[300px] md:min-h-[500px] max-h-[55vh] md:max-h-[85vh] p-2">
+              {previewMediaError ? (
+                <div className="text-center p-8 text-zinc-400 text-xs space-y-2">
+                  <Film className="w-10 h-10 mx-auto text-zinc-600 mb-2" />
+                  <p className="font-semibold text-zinc-300">Pratinjau media tidak dapat dimuat langsung</p>
+                  <p className="text-[11px] text-zinc-500 max-w-xs mx-auto">
+                    Aset media dari platform menggunakan tautan berbatas waktu. Anda dapat memutarnya langsung di platform asli.
+                  </p>
+                  {selectedPreviewPost.post.permalink && (
+                    <a
+                      href={selectedPreviewPost.post.permalink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white font-medium text-xs mt-3 border border-zinc-700 transition-colors"
+                    >
+                      <span>Buka di {selectedPreviewPost.post.platform}</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+              ) : selectedPreviewPost.mediaUrl?.includes('.mp4') ? (
+                <video
+                  src={selectedPreviewPost.mediaUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                  onError={() => setPreviewMediaError(true)}
+                  className="w-full h-full max-h-[50vh] md:max-h-[80vh] object-contain rounded-lg"
+                />
+              ) : selectedPreviewPost.mediaUrl ? (
+                <img
+                  src={selectedPreviewPost.mediaUrl}
+                  alt={selectedPreviewPost.post.titleOrCaption || 'Media preview'}
+                  onError={() => setPreviewMediaError(true)}
+                  className="w-full h-full max-h-[50vh] md:max-h-[80vh] object-contain rounded-lg"
+                />
+              ) : (
+                <div className="text-center p-8 text-zinc-500 text-xs">
+                  <Film className="w-10 h-10 mx-auto mb-2 text-zinc-600" />
+                  <span>Media streaming tidak tersedia</span>
+                </div>
+              )}
+
+              {/* Badges di atas player */}
+              <div className="absolute top-4 left-4 flex items-center gap-2">
+                <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-black/70 backdrop-blur-md border border-white/10 uppercase tracking-wider text-white">
+                  {selectedPreviewPost.post.platform}
+                </span>
+                {selectedPreviewPost.post.additionalMetrics?.duration && (
+                  <span className="px-2 py-1 rounded-md text-[10px] font-mono font-semibold bg-black/70 backdrop-blur-md border border-white/10 text-white">
+                    {selectedPreviewPost.post.additionalMetrics.duration}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Sisi Kanan: Panel Rincian Konten & Metrik */}
+            <div className="w-full md:w-88 p-5 bg-zinc-900 border-t md:border-t-0 md:border-l border-zinc-800 flex flex-col justify-between overflow-y-auto">
+              <div className="space-y-4">
+                {/* Header Akun & Tutup Modal */}
+                <div className="flex items-start justify-between gap-3 border-b border-zinc-800 pb-3.5">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-sm text-white truncate">
+                        {selectedPreviewPost.post.accountHandle || `@${selectedPreviewPost.post.platform}`}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-zinc-400 font-mono">
+                      Dipublikasikan {formatLocalDate(selectedPreviewPost.post.publishedAt)}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPreviewPost(null)}
+                    aria-label="Tutup pratinjau media"
+                    className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer shrink-0"
+                    title="Tutup (ESC)"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Caption Lengkap Tanpa Potong */}
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                    Keterangan / Caption
+                  </span>
+                  <div className="max-h-40 overflow-y-auto text-xs text-zinc-200 leading-relaxed whitespace-pre-wrap pr-1 select-text">
+                    {selectedPreviewPost.post.titleOrCaption || (
+                      <span className="text-zinc-500 italic">Tidak ada keterangan teks</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Grid Metrik Performa 2x2 */}
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                    Metrik Performa Riil
+                  </span>
+                  <div className="grid grid-cols-2 gap-2 text-center">
+                    <div className="p-2.5 rounded-xl bg-zinc-800/80 border border-zinc-700/60 space-y-1">
+                      <div className="flex items-center justify-center gap-1 text-[11px] text-zinc-400">
+                        <Eye className="w-3.5 h-3.5 text-sky-400" />
+                        <span>Penayangan</span>
+                      </div>
+                      <div className="text-base font-bold font-mono text-white">
+                        {Number(selectedPreviewPost.post.viewsCount).toLocaleString('id-ID')}
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-zinc-800/80 border border-zinc-700/60 space-y-1">
+                      <div className="flex items-center justify-center gap-1 text-[11px] text-zinc-400">
+                        <ThumbsUp className="w-3.5 h-3.5 text-rose-400" />
+                        <span>Suka</span>
+                      </div>
+                      <div className="text-base font-bold font-mono text-white">
+                        {Number(selectedPreviewPost.post.likesCount).toLocaleString('id-ID')}
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-zinc-800/80 border border-zinc-700/60 space-y-1">
+                      <div className="flex items-center justify-center gap-1 text-[11px] text-zinc-400">
+                        <MessageCircle className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Komentar</span>
+                      </div>
+                      <div className="text-base font-bold font-mono text-white">
+                        {Number(selectedPreviewPost.post.commentsCount).toLocaleString('id-ID')}
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-zinc-800/80 border border-zinc-700/60 space-y-1">
+                      <div className="flex items-center justify-center gap-1 text-[11px] text-zinc-400">
+                        <TrendingUp className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Engagement</span>
+                      </div>
+                      <div className="text-base font-bold font-mono text-white">
+                        {selectedPreviewPost.post.additionalMetrics?.engagement_rate || '-'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons di Footer Panel */}
+              <div className="pt-4 border-t border-zinc-800 space-y-2 mt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const postToComment = selectedPreviewPost.post;
+                    setSelectedPreviewPost(null);
+                    openCommentsModal(postToComment);
+                  }}
+                  className="w-full py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-sm"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>Lihat Komentar &amp; Analisis Sentimen</span>
+                </button>
+
+                {selectedPreviewPost.post.permalink && (
+                  <a
+                    href={selectedPreviewPost.post.permalink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-semibold flex items-center justify-center gap-2 transition-colors border border-zinc-700/60"
+                  >
+                    <span>Buka di {selectedPreviewPost.post.platform}</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                )}
+              </div>
             </div>
           </div>
         </div>,

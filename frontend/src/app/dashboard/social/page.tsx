@@ -430,30 +430,22 @@ export default function SocialMediaPage() {
   });
   const [chartMetric, setChartMetric] = useState<'subscribers' | 'views'>('subscribers');
 
+  // State Filter Periode Waktu Analitik
+  const [periodFilter, setPeriodFilter] = useState<string>('30d');
+  const [customStartDate, setCustomStartDate] = useState<string>('');
+  const [customEndDate, setCustomEndDate] = useState<string>('');
+  const lastSyncTimeRef = useRef<number>(0);
+
   const handleSelectConnection = (id: string) => {
     setSelectedConnectionId(id);
     if (typeof window !== 'undefined') {
       localStorage.setItem('firenalytics_selected_conn_id', id);
     }
     fetchMetrics(id);
-    fetchPosts(id);
   };
 
-  // State Analisa Performa Konten (Video & Postingan)
-  const [posts, setPosts] = useState<SocialPost[]>([]);
-  const [postsSummary, setPostsSummary] = useState<PostsSummary | null>(null);
-  const [postsLoading, setPostsLoading] = useState(false);
-  const [postPlatformFilter, setPostPlatformFilter] = useState<string>('all');
-  const [postSortBy, setPostSortBy] = useState<'recent' | 'views' | 'likes' | 'comments'>('views');
-
-  // State Mount Portal & Modal Komentar Masuk
+  // State Mount Portal
   const [mounted, setMounted] = useState(false);
-  const [activeCommentsPost, setActiveCommentsPost] = useState<SocialPost | null>(null);
-  const [activeCommentsPostSentiment, setActiveCommentsPostSentiment] = useState<PostSentimentInfo | null>(null);
-  const [activeCommentSentimentFilter, setActiveCommentSentimentFilter] = useState<'all' | 'positive' | 'neutral' | 'negative'>('all');
-  const [commentsList, setCommentsList] = useState<PostComment[]>([]);
-  const [commentsLoading, setCommentsLoading] = useState(false);
-  const [commentsError, setCommentsError] = useState<string | null>(null);
 
   // State Intelijensi Konten & Analisis Sentimen AI
   const [insightsData, setInsightsData] = useState<AIInsightsData | null>(null);
@@ -481,18 +473,6 @@ export default function SocialMediaPage() {
   useEffect(() => {
     setMounted(true);
   }, []);
-
-  // Kunci scroll halaman belakang saat modal komentar terbuka
-  useEffect(() => {
-    if (activeCommentsPost) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, [activeCommentsPost]);
 
   // Helper untuk mendapatkan token autentikasi ganda (Cookie + Bearer Header)
   const getAuthHeaders = useCallback((): Record<string, string> => {
@@ -535,7 +515,7 @@ export default function SocialMediaPage() {
     }
   }, [getAuthHeaders, currentProject?.id]);
 
-  // Fetch data metrik analitik & histori time-series dari D1 (Dinamis per Akun Terpilih & Workspace)
+  // Fetch data metrik analitik & histori time-series dari D1 (Dinamis per Akun Terpilih, Periode, & Workspace)
   const fetchMetrics = useCallback(async (connId?: string) => {
     try {
       setMetricsLoading(true);
@@ -548,6 +528,11 @@ export default function SocialMediaPage() {
       const params = new URLSearchParams();
       if (targetId) params.append('connectionId', targetId);
       if (currentProject?.id) params.append('projectId', currentProject.id);
+      if (periodFilter && periodFilter !== 'all') params.append('period', periodFilter);
+      if (periodFilter === 'custom') {
+        if (customStartDate) params.append('startDate', customStartDate);
+        if (customEndDate) params.append('endDate', customEndDate);
+      }
 
       const url = `/api/composio/metrics?${params.toString()}`;
       const res = await fetch(url, {
@@ -558,6 +543,13 @@ export default function SocialMediaPage() {
         const json = await res.json();
         if (json.success) {
           setMetricsData(json);
+          // Konsolidasi efisien: sinkronkan daftar connections dari respon metrics tanpa hit /status terpisah
+          if (Array.isArray(json.connections) && json.connections.length > 0) {
+            setConnections((prev) => {
+              if (JSON.stringify(prev) === JSON.stringify(json.connections)) return prev;
+              return json.connections;
+            });
+          }
           const activeId = targetId || json.primaryAccount?.id;
           if (activeId) {
             setSelectedConnectionId((prev) => (prev === activeId ? prev : activeId));
@@ -572,90 +564,26 @@ export default function SocialMediaPage() {
     } finally {
       setMetricsLoading(false);
     }
-  }, [getAuthHeaders, selectedConnectionId, currentProject?.id]);
-
-  // Fetch daftar performa konten video & postingan dari D1
-  const fetchPosts = useCallback(async (connId?: string) => {
-    try {
-      setPostsLoading(true);
-      const targetConnId = connId !== undefined ? connId : selectedConnectionId;
-      const params = new URLSearchParams();
-      if (postPlatformFilter !== 'all') {
-        params.append('platform', postPlatformFilter);
-      }
-      if (targetConnId) {
-        const targetConn = connectionsRef.current.find((c) => c.id === targetConnId);
-        if (postPlatformFilter === 'all' || (targetConn && targetConn.platform.toLowerCase() === postPlatformFilter.toLowerCase())) {
-          params.append('connectionId', targetConnId);
-        }
-      }
-      params.append('sort', postSortBy);
-      if (currentProject?.id) {
-        params.append('projectId', currentProject.id);
-      }
-
-      const res = await fetch(`/api/composio/posts?${params.toString()}`, {
-        headers: getAuthHeaders(),
-        credentials: 'include',
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success) {
-          setPosts(json.posts || []);
-          setPostsSummary(json.summary || null);
-        }
-      }
-    } catch (err: any) {
-      console.warn('Gagal memuat data postingan & video:', err.message);
-    } finally {
-      setPostsLoading(false);
-    }
-  }, [getAuthHeaders, postPlatformFilter, postSortBy, selectedConnectionId, currentProject?.id]);
-
-  // Handler: Buka modal dan muat komentar riil untuk postingan spesifik
-  const openCommentsModal = useCallback(async (post: SocialPost) => {
-    setActiveCommentsPost(post);
-    setActiveCommentsPostSentiment(null);
-    setActiveCommentSentimentFilter('all');
-    setCommentsLoading(true);
-    setCommentsError(null);
-    setCommentsList([]);
-
-    try {
-      const res = await fetch(`/api/composio/posts/${post.id}/comments`, {
-        headers: getAuthHeaders(),
-        credentials: 'include',
-      });
-      const json = await res.json();
-      if (res.ok && json.success) {
-        setCommentsList(json.comments || []);
-        setActiveCommentsPostSentiment(json.postSentiment || null);
-      } else {
-        setCommentsError(json.error || 'Gagal memuat komentar');
-      }
-    } catch (err: any) {
-      setCommentsError(err.message || 'Terjadi kesalahan koneksi');
-    } finally {
-      setCommentsLoading(false);
-    }
-  }, [getAuthHeaders]);
+  }, [getAuthHeaders, selectedConnectionId, currentProject?.id, periodFilter, customStartDate, customEndDate]);
 
   // Fetch data intelijensi konten dan analisis sentimen AI
   const fetchInsights = useCallback(async () => {
     setInsightsLoading(true);
     try {
       const params = new URLSearchParams();
-      if (postPlatformFilter !== 'all') {
-        params.append('platform', postPlatformFilter);
-      }
       if (selectedConnectionId) {
         const targetConn = connectionsRef.current.find((c) => c.id === selectedConnectionId);
-        if (postPlatformFilter === 'all' || (targetConn && targetConn.platform.toLowerCase() === postPlatformFilter.toLowerCase())) {
+        if (targetConn) {
           params.append('connectionId', selectedConnectionId);
         }
       }
       if (currentProject?.id) {
         params.append('projectId', currentProject.id);
+      }
+      if (periodFilter && periodFilter !== 'all') params.append('period', periodFilter);
+      if (periodFilter === 'custom') {
+        if (customStartDate) params.append('startDate', customStartDate);
+        if (customEndDate) params.append('endDate', customEndDate);
       }
 
       const res = await fetch(`/api/composio/insights?${params.toString()}`, {
@@ -671,7 +599,7 @@ export default function SocialMediaPage() {
     } finally {
       setInsightsLoading(false);
     }
-  }, [getAuthHeaders, postPlatformFilter, selectedConnectionId, currentProject?.id]);
+  }, [getAuthHeaders, selectedConnectionId, currentProject?.id, periodFilter, customStartDate, customEndDate]);
 
   // Handler: Refresh manual analisis intelijensi AI
   const handleRefreshInsights = async () => {
@@ -698,8 +626,15 @@ export default function SocialMediaPage() {
   const fetchAttribution = useCallback(async () => {
     setAttributionLoading(true);
     try {
-      const q = currentProject?.id ? `?projectId=${encodeURIComponent(currentProject.id)}` : '';
-      const res = await fetch(`/api/composio/attribution${q}`, {
+      const params = new URLSearchParams();
+      if (currentProject?.id) params.append('projectId', currentProject.id);
+      if (periodFilter && periodFilter !== 'all') params.append('period', periodFilter);
+      if (periodFilter === 'custom') {
+        if (customStartDate) params.append('startDate', customStartDate);
+        if (customEndDate) params.append('endDate', customEndDate);
+      }
+
+      const res = await fetch(`/api/composio/attribution?${params.toString()}`, {
         headers: getAuthHeaders(),
         credentials: 'include',
       });
@@ -712,7 +647,7 @@ export default function SocialMediaPage() {
     } finally {
       setAttributionLoading(false);
     }
-  }, [getAuthHeaders, currentProject?.id]);
+  }, [getAuthHeaders, currentProject?.id, periodFilter, customStartDate, customEndDate]);
 
   // Fetch daftar tautan pelacak kampanye Link-in-Bio
   const fetchCampaignLinks = useCallback(async () => {
@@ -850,12 +785,7 @@ export default function SocialMediaPage() {
     fetchCampaignLinks();
   }, [fetchConnections, fetchMetrics, fetchAttribution, fetchCampaignLinks]);
 
-  // 2. Muat postingan saat filter platform, urutan, atau akun terpilih berubah
-  useEffect(() => {
-    fetchPosts();
-  }, [fetchPosts]);
-
-  // 3. Muat analisis intelijensi AI secara terisolasi saat filter berubah
+  // 2. Muat analisis intelijensi AI secara terisolasi saat filter berubah
   useEffect(() => {
     fetchInsights();
   }, [fetchInsights]);
@@ -938,7 +868,6 @@ export default function SocialMediaPage() {
           setIsSyncing(false);
           await fetchConnections();
           await fetchMetrics();
-          await fetchPosts();
           // Bersihkan URL dari query string tanpa reload halaman
           window.history.replaceState({}, '', window.location.pathname);
         }
@@ -946,7 +875,7 @@ export default function SocialMediaPage() {
 
       handleOAuthReturn();
     }
-  }, [getAuthHeaders, fetchConnections, fetchMetrics, fetchPosts, currentProject?.id]);
+  }, [getAuthHeaders, fetchConnections, fetchMetrics, currentProject?.id]);
 
   // Handler: Mulai alur otorisasi OAuth via Composio v3 dengan label dan projectId
   const handleConnect = async (platformId: string, customLabel?: string) => {
@@ -1017,6 +946,18 @@ export default function SocialMediaPage() {
 
   // Handler: Picu sinkronisasi cron manual untuk pengujian
   const handleManualSync = async () => {
+    // Cooldown Debounce 15 detik untuk mencegah spam upstream API
+    const now = Date.now();
+    if (now - lastSyncTimeRef.current < 15000) {
+      const waitSec = Math.ceil((15000 - (now - lastSyncTimeRef.current)) / 1000);
+      setNotification({
+        type: 'error',
+        message: `Harap tunggu ${waitSec} detik sebelum melakukan sinkronisasi ulang.`,
+      });
+      return;
+    }
+    lastSyncTimeRef.current = now;
+
     setIsSyncing(true);
     setNotification(null);
 
@@ -1053,11 +994,10 @@ export default function SocialMediaPage() {
 
       setNotification({
         type: 'success',
-        message: 'Data channel dan konten postingan berhasil diperbarui secara langsung!',
+        message: 'Data channel dan performa analitik berhasil diperbarui secara langsung!',
       });
       await fetchConnections();
       await fetchMetrics();
-      await fetchPosts();
       await fetchInsights();
       await fetchAttribution();
       await fetchCampaignLinks();
@@ -1096,7 +1036,6 @@ export default function SocialMediaPage() {
       });
       await fetchConnections();
       await fetchMetrics();
-      await fetchPosts();
       await fetchInsights();
       await fetchAttribution();
       await fetchCampaignLinks();
@@ -1253,6 +1192,24 @@ export default function SocialMediaPage() {
             </div>
           )}
 
+          {/* Period Selector (Filter Rentang Waktu) */}
+          <div className="h-9 flex items-center gap-2 bg-white border border-zinc-200 rounded-lg px-3 shadow-xs">
+            <Calendar className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+            <select
+              value={periodFilter}
+              onChange={(e) => setPeriodFilter(e.target.value)}
+              className="bg-transparent text-xs font-semibold text-zinc-800 focus:outline-none cursor-pointer pr-1"
+              title="Filter rentang waktu metrik analitik"
+            >
+              <option value="7d">7 Hari Terakhir</option>
+              <option value="30d">30 Hari Terakhir</option>
+              <option value="this_month">Bulan Ini</option>
+              <option value="last_month">Bulan Lalu</option>
+              <option value="all">Semua Waktu</option>
+              <option value="custom">Kustom Rentang...</option>
+            </select>
+          </div>
+
           <Link
             href="/dashboard/leads"
             className="h-9 px-3 text-xs bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 font-medium rounded-lg transition-all flex items-center gap-1.5 shadow-xs"
@@ -1274,6 +1231,45 @@ export default function SocialMediaPage() {
           </button>
         </div>
       </div>
+
+      {/* Strip Rentang Tanggal Kustom */}
+      {periodFilter === 'custom' && (
+        <div className="flex flex-wrap items-center gap-3 p-3 bg-zinc-50 border border-zinc-200 rounded-xl text-xs">
+          <span className="font-semibold text-zinc-700 flex items-center gap-1.5">
+            <Calendar className="w-3.5 h-3.5 text-zinc-500" />
+            Rentang Waktu Kustom:
+          </span>
+          <div className="flex items-center gap-1.5">
+            <label className="text-zinc-500 text-[11px]">Dari:</label>
+            <input
+              type="date"
+              value={customStartDate}
+              onChange={(e) => setCustomStartDate(e.target.value)}
+              className="px-2.5 py-1 text-xs bg-white border border-zinc-200 rounded-md focus:outline-none focus:ring-1 focus:ring-zinc-900"
+            />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <label className="text-zinc-500 text-[11px]">Sampai:</label>
+            <input
+              type="date"
+              value={customEndDate}
+              onChange={(e) => setCustomEndDate(e.target.value)}
+              className="px-2.5 py-1 text-xs bg-white border border-zinc-200 rounded-md focus:outline-none focus:ring-1 focus:ring-zinc-900"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              fetchMetrics();
+              fetchInsights();
+              fetchAttribution();
+            }}
+            className="px-3 py-1 bg-zinc-900 hover:bg-zinc-800 text-white font-medium rounded-md text-xs transition-colors cursor-pointer"
+          >
+            Terapkan Filter
+          </button>
+        </div>
+      )}
 
       {/* Alert Notifikasi */}
       {notification && (
@@ -2400,264 +2396,7 @@ export default function SocialMediaPage() {
       </div>
 
       {/* ============================================================= */}
-      {/* MODAL: Komentar Masuk Riil Multi-Platform (Instagram, YouTube, TikTok) */}
-      {/* ============================================================= */}
-      {mounted && activeCommentsPost && (() => {
-        const postPlatform = (activeCommentsPost.platform || '').toLowerCase();
-        const platformLabel =
-          postPlatform === 'youtube'
-            ? 'YouTube'
-            : postPlatform === 'tiktok'
-            ? 'TikTok'
-            : postPlatform === 'instagram'
-            ? 'Instagram'
-            : postPlatform
-            ? postPlatform.toUpperCase()
-            : 'Platform';
-
-        return createPortal(
-          <div
-            className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
-            style={{ width: '100vw', height: '100vh', margin: 0, top: 0, left: 0, right: 0, bottom: 0 }}
-            onClick={() => setActiveCommentsPost(null)}
-          >
-            <div
-              className="bg-white border border-zinc-200 rounded-2xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 relative z-10"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header Modal */}
-              <div className="p-4 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/70">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-11 h-11 rounded-lg overflow-hidden bg-zinc-100 shrink-0 border border-zinc-200">
-                    {activeCommentsPost.thumbnailUrl ? (
-                      <img
-                        src={activeCommentsPost.thumbnailUrl}
-                        alt={activeCommentsPost.titleOrCaption}
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-zinc-400">
-                        <MessageCircle className="w-5 h-5" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-sm text-zinc-900 truncate">
-                        {activeCommentsPost.titleOrCaption || 'Postingan'}
-                      </span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
-                        {commentsList.length > 0 ? `${commentsList.length} Komentar Riil (${platformLabel})` : `${activeCommentsPost.commentsCount} Komentar`}
-                      </span>
-                    </div>
-                    <p className="text-xs text-zinc-400 font-mono truncate">
-                      {(activeCommentsPost.accountHandle || connections.find((c) => c.platform.toLowerCase() === activeCommentsPost.platform.toLowerCase())?.account_handle || '-')} • {platformLabel}
-                    </p>
-                  </div>
-                </div>
-
-              <button
-                type="button"
-                onClick={() => setActiveCommentsPost(null)}
-                className="w-8 h-8 rounded-lg bg-zinc-100 hover:bg-zinc-200 flex items-center justify-center text-zinc-500 hover:text-zinc-800 transition-colors cursor-pointer shrink-0"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Konten Komentar (Scrollable) */}
-            <div className="p-4 overflow-y-auto flex-1 space-y-3">
-              {commentsLoading ? (
-                <div className="py-12 flex flex-col items-center justify-center text-xs text-zinc-400 gap-2.5">
-                  <RefreshCw className="w-5 h-5 animate-spin text-emerald-600" />
-                  <span>Mengambil komentar terbaru...</span>
-                </div>
-              ) : commentsError ? (
-                <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                  <span>{commentsError}</span>
-                </div>
-              ) : commentsList.length === 0 ? (
-                <div className="py-12 text-center text-xs text-zinc-400 space-y-1">
-                  <p className="font-semibold text-zinc-600">Belum ada komentar</p>
-                  <p>Belum ada komentar publik yang terdeteksi untuk postingan ini.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {/* Sentimen Postingan Berbasis AI */}
-                  {activeCommentsPostSentiment && (
-                    <div className="p-3 rounded-xl bg-violet-50/70 border border-violet-200/70 space-y-2">
-                      <div className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-1.5 font-bold text-zinc-900">
-                          <Sparkles className="w-3.5 h-3.5 text-violet-600" />
-                          <span>Sentimen Audiens: </span>
-                          <span className="text-violet-700 font-semibold">{activeCommentsPostSentiment.label}</span>
-                        </div>
-                        <span className="text-[11px] font-mono text-zinc-500 font-bold">
-                          {activeCommentsPostSentiment.scorePct}% Skor Positif
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-[10px] font-mono flex-wrap">
-                        <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">
-                          {activeCommentsPostSentiment.positiveCount} Positif ({activeCommentsPostSentiment.positivePct}%)
-                        </span>
-                        <span className="px-2 py-0.5 rounded bg-zinc-200 text-zinc-700 font-medium">
-                          {activeCommentsPostSentiment.neutralCount} Netral ({activeCommentsPostSentiment.neutralPct}%)
-                        </span>
-                        {activeCommentsPostSentiment.negativeCount > 0 && (
-                          <span className="px-2 py-0.5 rounded bg-rose-100 text-rose-800 font-semibold">
-                            {activeCommentsPostSentiment.negativeCount} Evaluasi ({activeCommentsPostSentiment.negativePct}%)
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Filter Tab Sentimen */}
-                  <div className="flex items-center gap-1.5 pb-1 border-b border-zinc-100 text-xs overflow-x-auto">
-                    <button
-                      type="button"
-                      onClick={() => setActiveCommentSentimentFilter('all')}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
-                        activeCommentSentimentFilter === 'all'
-                          ? 'bg-zinc-900 text-white'
-                          : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-                      }`}
-                    >
-                      Semua ({commentsList.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveCommentSentimentFilter('positive')}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
-                        activeCommentSentimentFilter === 'positive'
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                      }`}
-                    >
-                      Positif ({commentsList.filter((c) => c.sentiment === 'positive').length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveCommentSentimentFilter('neutral')}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
-                        activeCommentSentimentFilter === 'neutral'
-                          ? 'bg-zinc-600 text-white'
-                          : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-                      }`}
-                    >
-                      Netral ({commentsList.filter((c) => c.sentiment === 'neutral').length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveCommentSentimentFilter('negative')}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
-                        activeCommentSentimentFilter === 'negative'
-                          ? 'bg-rose-600 text-white'
-                          : 'bg-rose-50 text-rose-700 hover:bg-rose-100'
-                      }`}
-                    >
-                      Evaluasi ({commentsList.filter((c) => c.sentiment === 'negative').length})
-                    </button>
-                  </div>
-
-                  <div className="space-y-2.5">
-                    {commentsList
-                      .filter((c) => {
-                        if (activeCommentSentimentFilter === 'all') return true;
-                        return c.sentiment === activeCommentSentimentFilter;
-                      })
-                      .map((c) => {
-                        const isOwner = c.username === (activeCommentsPost.accountHandle || '').replace('@', '');
-                        const isGeneric = !c.username || c.username.toLowerCase().includes('pengguna') || c.username.toLowerCase().includes('user');
-                        const displayUsername = isGeneric ? `Pengguna ${platformLabel}` : `@${c.username.replace(/^@/, '')}`;
-                        const dateStr = c.timestamp
-                          ? formatLocalDateTime(c.timestamp)
-                          : '';
-
-                        return (
-                          <div
-                            key={c.id}
-                            className={`p-3 rounded-xl border transition-all ${
-                              isOwner
-                                ? 'bg-emerald-50/40 border-emerald-200/60'
-                                : 'bg-zinc-50/60 border-zinc-100 hover:border-zinc-200'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between mb-1">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className="font-bold text-xs text-zinc-900">
-                                  {displayUsername}
-                                </span>
-                                {isOwner && (
-                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-emerald-100 text-emerald-800">
-                                    Pembuat
-                                  </span>
-                                )}
-                                {c.sentiment && (
-                                  <span
-                                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                                      c.sentiment === 'positive'
-                                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200/60'
-                                        : c.sentiment === 'negative'
-                                        ? 'bg-rose-100 text-rose-800 border border-rose-200/60'
-                                        : 'bg-zinc-100 text-zinc-600 border border-zinc-200/60'
-                                    }`}
-                                  >
-                                    {c.sentimentLabel || (c.sentiment === 'positive' ? 'Positif' : c.sentiment === 'negative' ? 'Evaluasi' : 'Netral')}
-                                  </span>
-                                )}
-                              </div>
-                              <span className="text-[10px] text-zinc-400 font-mono">{dateStr}</span>
-                            </div>
-                            <p className="text-xs text-zinc-700 leading-relaxed whitespace-pre-wrap">
-                              {c.text}
-                            </p>
-                            {c.likeCount > 0 && (
-                              <div className="mt-1 flex items-center gap-1 text-[10px] text-rose-500 font-semibold">
-                                <ThumbsUp className="w-2.5 h-2.5" />
-                                <span>{c.likeCount} suka</span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-
-                    {commentsList.filter((c) => {
-                      if (activeCommentSentimentFilter === 'all') return true;
-                      return c.sentiment === activeCommentSentimentFilter;
-                    }).length === 0 && (
-                      <div className="py-6 text-center text-xs text-zinc-400">
-                        Tidak ada komentar dengan kategori sentimen ini.
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Footer Modal */}
-            <div className="p-3 border-t border-zinc-100 bg-zinc-50 flex items-center justify-between text-xs">
-              <span className="text-[11px] text-zinc-400">
-                Komentar resmi terverifikasi ({platformLabel})
-              </span>
-              {activeCommentsPost.permalink && (
-                <a
-                  href={activeCommentsPost.permalink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-zinc-800 hover:text-black hover:underline"
-                >
-                  <span>Buka di {platformLabel}</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-              )}
-            </div>
-          </div>
-        </div>,
-        document.body
-      );
-    })()}
+      {/* MODAL: Generator Tautan Pelacak Link-in-Bio */}
 
       {/* ============================================================= */}
       {/* MODAL: Generator Tautan Pelacak Link-in-Bio */}
