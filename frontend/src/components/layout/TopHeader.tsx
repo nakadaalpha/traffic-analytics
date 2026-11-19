@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
 import { useProject } from '@/context/ProjectContext';
+import { useCommandPalette } from '@/context/CommandPaletteContext';
 import {
   LogOut,
   Activity,
@@ -13,12 +14,15 @@ import {
   Check,
   Plus,
   Shield,
-  Layers
+  Layers,
+  Search,
+  Command,
 } from 'lucide-react';
 
 export function TopHeader() {
   const { user, logout } = useAuth();
   const { currentProject, projects, selectProject, userRole } = useProject();
+  const { openCommandPalette } = useCommandPalette();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -119,6 +123,29 @@ export function TopHeader() {
       </div>
 
       <div className="flex items-center gap-3">
+        {/* Command Palette Trigger Button */}
+        <button
+          type="button"
+          onClick={openCommandPalette}
+          className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-zinc-200 hover:border-zinc-300 bg-zinc-50 hover:bg-zinc-100 text-xs text-zinc-500 hover:text-zinc-800 transition-all cursor-pointer shadow-2xs group"
+          title="Pencarian cepat & perintah (⌘K)"
+        >
+          <Search className="w-3.5 h-3.5 text-zinc-400 group-hover:text-zinc-600" />
+          <span className="font-normal text-zinc-500">Cari aksi...</span>
+          <kbd className="inline-flex items-center gap-0.5 px-1.5 py-0.2 text-[10px] font-mono font-medium text-zinc-400 bg-white border border-zinc-200 rounded shadow-2xs ml-1">
+            <Command className="w-2.5 h-2.5" /> K
+          </kbd>
+        </button>
+
+        <button
+          type="button"
+          onClick={openCommandPalette}
+          className="md:hidden p-1.5 rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-100 transition-colors cursor-pointer"
+          title="Pencarian Cepat (⌘K)"
+        >
+          <Search className="w-4 h-4" />
+        </button>
+
         {user ? (
           <div className="flex items-center gap-3 pl-3 border-l border-zinc-200 text-xs">
             <div className="flex items-center gap-2.5">

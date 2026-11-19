@@ -36,5 +36,9 @@ lerna-debug.log*
 .vscode/
 .idea/
 
+# Test / Audit outputs
+.lighthouseci/
+frontend/.lighthouseci/
+
 # Local Documentation
 /docs/

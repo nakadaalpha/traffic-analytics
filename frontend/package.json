@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "audit": "node scripts/audit-bulk.mjs"
   },
   "dependencies": {
     "chart.js": "^4.5.1",
